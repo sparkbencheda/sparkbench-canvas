@@ -1,0 +1,59 @@
+{
+  "name": "sparkbench-canvas",
+  "displayName": "SparkBench KiCad Viewer",
+  "description": "View KiCad schematics (.kicad_sch) and PCB layouts (.kicad_pcb) directly in VS Code",
+  "version": "0.1.0",
+  "publisher": "sparkbench",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "sparkbench.kicadPcb",
+        "displayName": "KiCad PCB Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.kicad_pcb"
+          }
+        ],
+        "priority": "default"
+      },
+      {
+        "viewType": "sparkbench.kicadSch",
+        "displayName": "KiCad Schematic Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.kicad_sch"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "sparkbench.openKicadViewer",
+        "title": "SparkBench: Open KiCad Viewer"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "vsce package",
+    "lint": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.27.1",
+    "typescript": "^5.9.3"
+  }
+}

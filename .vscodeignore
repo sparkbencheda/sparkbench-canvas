@@ -1,0 +1,9 @@
+.vscode/**
+node_modules/**
+src/**
+vendor-kicanvas/**
+*.ts
+!dist/**
+esbuild.mjs
+tsconfig.json
+.gitignore
