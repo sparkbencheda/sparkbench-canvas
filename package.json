@@ -48,12 +48,19 @@
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "vsce package",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "node tests/e2e/build-harness.mjs && npx playwright test",
+    "test:e2e:headed": "node tests/e2e/build-harness.mjs && npx playwright test --headed"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.27.1",
-    "typescript": "^5.9.3"
+    "serve": "^14.2.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   }
 }

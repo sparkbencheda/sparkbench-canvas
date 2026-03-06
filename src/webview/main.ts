@@ -6,6 +6,8 @@ import { SchematicViewer } from "../../vendor-kicanvas/src/viewers/schematic/vie
 import { Project, ProjectPage } from "../../vendor-kicanvas/src/kicanvas/project";
 import { LocalFileSystem } from "../../vendor-kicanvas/src/kicanvas/services/vfs";
 import themes from "../../vendor-kicanvas/src/kicanvas/themes/index";
+import { EditorOverlay } from "./editor-overlay";
+import { ToolType } from "../editor/tools";
 
 declare global {
   interface Window {
@@ -33,6 +35,9 @@ const fileType = window.__KICAD_FILE_TYPE__;
 
 let currentViewer: BoardViewer | SchematicViewer | null = null;
 let currentProject: Project | null = null;
+let currentSch: KicadSch | null = null;
+let editorOverlay: EditorOverlay | null = null;
+let editModeActive = false;
 
 function unescapeHtml(text: string): string {
   const ta = document.createElement("textarea");
@@ -430,6 +435,8 @@ async function showPage(page: ProjectPage) {
 
       document.getElementById("btn-flip")?.style.setProperty("display", "");
     } else if (doc instanceof KicadSch) {
+      currentSch = doc;
+
       setupTabs([
         { id: "symbols", label: "Symbols" },
         { id: "properties", label: "Properties" },
@@ -447,6 +454,17 @@ async function showPage(page: ProjectPage) {
       wireViewerEvents(viewer);
       buildSymbolsPanel(viewer, doc);
       buildInfoPanel(doc, currentProject);
+
+      // Reset editor overlay when schematic changes
+      if (editorOverlay) {
+        editorOverlay.dispose();
+        editorOverlay = null;
+      }
+      if (editModeActive) {
+        editModeActive = false;
+        editorToolbar.style.display = "none";
+        editModeBtn?.classList.remove("active");
+      }
 
       document.getElementById("btn-flip")?.style.setProperty("display", "none");
     }
@@ -556,6 +574,7 @@ async function loadProject(projectFiles: Record<string, string>, primaryFileName
       propsPanel.innerHTML = `<div class="panel-section"><div class="panel-section-title">Selection</div><div id="props-content"><span style="color:var(--fg-dim)">Click an item</span></div></div>`;
 
       const sch = new KicadSch(name, content);
+      currentSch = sch;
       const viewer = new SchematicViewer(canvas, true, theme.schematic);
       currentViewer = viewer;
       await viewer.setup();
@@ -579,6 +598,91 @@ function prop(label: string, value: string): string {
 function info(label: string, value: string): string {
   return `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`;
 }
+
+// ==================== Editor Mode ====================
+
+const editorToolbar = document.getElementById("editor-toolbar")!;
+const editorStatusEl = document.getElementById("editor-status")!;
+const editModeBtn = document.getElementById("btn-edit-mode");
+
+function toggleEditMode() {
+  editModeActive = !editModeActive;
+
+  // Find the kicanvas viewer canvas
+  const viewerCanvas = canvasContainer.querySelector("canvas:not([data-editor])") as HTMLCanvasElement | null;
+
+  if (editModeActive) {
+    editorToolbar.style.display = "flex";
+    editModeBtn?.classList.add("active");
+
+    // Hide kicanvas viewer canvas
+    if (viewerCanvas) viewerCanvas.style.display = "none";
+
+    // Create overlay if needed, importing current schematic data
+    if (!editorOverlay) {
+      editorOverlay = new EditorOverlay(canvasContainer, editorStatusEl, currentSch ?? undefined);
+      editorOverlay.canvas.dataset.editor = "true";
+    }
+    editorOverlay.canvas.style.display = "block";
+  } else {
+    editorToolbar.style.display = "none";
+    editModeBtn?.classList.remove("active");
+
+    // Show kicanvas viewer canvas, hide editor overlay
+    if (viewerCanvas) viewerCanvas.style.display = "block";
+    if (editorOverlay) {
+      editorOverlay.canvas.style.display = "none";
+    }
+  }
+}
+
+editModeBtn?.addEventListener("click", toggleEditMode);
+
+// Editor tool buttons
+editorToolbar.querySelectorAll(".etool").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (!editorOverlay) return;
+    const tool = (btn as HTMLElement).dataset.tool as ToolType;
+    editorOverlay.setTool(tool);
+
+    // Update active state on buttons
+    editorToolbar.querySelectorAll(".etool").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+  });
+});
+
+// Undo/Redo buttons
+document.getElementById("btn-undo")?.addEventListener("click", () => {
+  if (!editorOverlay) return;
+  const desc = editorOverlay.doc.performUndo();
+  if (desc) editorStatusEl.textContent = `Undo: ${desc}`;
+});
+document.getElementById("btn-redo")?.addEventListener("click", () => {
+  if (!editorOverlay) return;
+  const desc = editorOverlay.doc.performRedo();
+  if (desc) editorStatusEl.textContent = `Redo: ${desc}`;
+});
+
+// Poll tool state to sync button highlights with keyboard shortcuts
+setInterval(() => {
+  if (!editorOverlay || !editModeActive) return;
+  const currentTool = editorOverlay.tools.activeTool;
+  editorToolbar.querySelectorAll(".etool").forEach((btn) => {
+    const tool = (btn as HTMLElement).dataset.tool;
+    btn.classList.toggle("active", tool === currentTool);
+  });
+}, 100);
+
+// Keyboard shortcut to toggle edit mode
+document.addEventListener("keydown", (e) => {
+  if (e.key === "e" && !e.ctrlKey && !e.metaKey && !e.altKey && fileType === "schematic") {
+    // Only toggle if we're not in an input or the editor canvas
+    if (document.activeElement === document.body || document.activeElement === canvasContainer) {
+      toggleEditMode();
+      e.preventDefault();
+    }
+  }
+});
 
 // Boot
 const primaryContent = unescapeHtml(window.__KICAD_FILE_CONTENT__);

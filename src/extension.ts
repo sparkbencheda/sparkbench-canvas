@@ -179,6 +179,11 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
     .toolbar-btn:disabled { opacity: 0.4; cursor: default; }
     .toolbar-sep { width: 1px; height: 18px; background: var(--border); }
 
+    #editor-toolbar {
+      display: flex; align-items: center; gap: 4px;
+      padding: 3px 8px; background: var(--bg); border-bottom: 1px solid var(--border); flex-shrink: 0;
+    }
+    #editor-toolbar .etool.active { background: var(--accent); color: white; }
     #canvas-container { flex: 1; position: relative; overflow: hidden; }
     #canvas-container canvas { width: 100%; height: 100%; display: block; }
 
@@ -254,8 +259,25 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
         ${isPcb ? '<button class="toolbar-btn" id="btn-flip" title="Flip board view">Flip</button>' : ""}
         <button class="toolbar-btn" id="btn-zoom-fit" title="Zoom to fit">Fit</button>
         <button class="toolbar-btn" id="btn-zoom-sel" title="Zoom to selection" disabled>Selection</button>
+        ${!isPcb ? `<div class="toolbar-sep"></div>
+        <button class="toolbar-btn" id="btn-edit-mode" title="Toggle editor overlay (E)">Edit</button>` : ""}
         <div class="toolbar-sep"></div>
         <button class="toolbar-btn" id="btn-sidebar-toggle" title="Toggle sidebar">Panel</button>
+      </div>
+      <div id="editor-toolbar" style="display:none">
+        <button class="toolbar-btn etool active" data-tool="select" title="Select (Esc)">Select</button>
+        <button class="toolbar-btn etool" data-tool="wire" title="Wire (W)">Wire</button>
+        <button class="toolbar-btn etool" data-tool="bus" title="Bus (B)">Bus</button>
+        <button class="toolbar-btn etool" data-tool="symbol" title="Symbol (A)">Symbol</button>
+        <button class="toolbar-btn etool" data-tool="label" title="Label (L)">Label</button>
+        <button class="toolbar-btn etool" data-tool="global_label" title="Global Label">GLabel</button>
+        <button class="toolbar-btn etool" data-tool="junction" title="Junction (J)">Junction</button>
+        <button class="toolbar-btn etool" data-tool="no_connect" title="No Connect (Q)">NoConn</button>
+        <div class="toolbar-sep"></div>
+        <button class="toolbar-btn" id="btn-undo" title="Undo (Ctrl+Z)">Undo</button>
+        <button class="toolbar-btn" id="btn-redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+        <div class="toolbar-sep"></div>
+        <span id="editor-status" style="color:var(--fg-dim);padding:0 8px"></span>
       </div>
       <div id="canvas-container">
         <div id="loading-overlay"><span id="loading-text">Loading...</span></div>
