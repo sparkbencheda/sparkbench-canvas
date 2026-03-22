@@ -150,14 +150,19 @@ function importSymbol(doc: SchematicDoc, sym: SchematicSymbol) {
     }
   }
 
-  // Import pin positions from lib_symbol if available
+  // Import pin positions and lib_symbol reference
   try {
     const libSym = sym.lib_symbol;
     if (libSym) {
-      // Collect pins from the lib symbol and its children (unit sub-symbols)
+      symbol.libSymbol = libSym;
+      // Collect pins only from matching unit (unit 0 = common + active unit)
+      const activeUnit = sym.unit ?? 1;
       const allPins = [...libSym.pins];
       for (const child of libSym.children) {
-        allPins.push(...child.pins);
+        const u = child.unit ?? 0;
+        if (u === 0 || u === activeUnit) {
+          allPins.push(...child.pins);
+        }
       }
       for (const pin of allPins) {
         if (pin.at) {

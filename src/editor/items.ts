@@ -341,6 +341,7 @@ export class SchSymbol extends SchItem {
   mirror: "none" | "x" | "y";
   fields: SymbolField[];
   pins: SymbolPin[];
+  libSymbol: any; // kicanvas LibSymbol reference for rendering
 
   constructor(pos: Vec2, libId: string, id?: string) {
     super(id);
@@ -384,11 +385,65 @@ export class SchSymbol extends SchItem {
     c.mirror = this.mirror;
     c.fields = this.fields.map((f) => ({ ...f, pos: { ...f.pos } }));
     c.pins = this.pins.map((p) => ({ ...p, pos: { ...p.pos } }));
+    c.libSymbol = this.libSymbol;
     c.flags = this.flags;
     return c;
   }
 
   getBBox(): BBox {
+    // Try libSymbol drawing bounds first
+    if (this.libSymbol) {
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      const collectBounds = (sym: any) => {
+        for (const d of sym.drawings ?? []) {
+          if (d.start && d.end) { // Rectangle
+            for (const p of [d.start, d.end]) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+          } else if (d.pts) { // Polyline
+            for (const p of d.pts) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+          } else if (d.center && d.radius != null) { // Circle
+            minX = Math.min(minX, d.center.x - d.radius); minY = Math.min(minY, d.center.y - d.radius);
+            maxX = Math.max(maxX, d.center.x + d.radius); maxY = Math.max(maxY, d.center.y + d.radius);
+          } else if (d.start && d.mid && d.end) { // Arc
+            for (const p of [d.start, d.mid, d.end]) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+          }
+        }
+        for (const pin of sym.pins ?? []) {
+          if (pin.at) {
+            const px = pin.at.position.x, py = pin.at.position.y;
+            minX = Math.min(minX, px); minY = Math.min(minY, py);
+            maxX = Math.max(maxX, px); maxY = Math.max(maxY, py);
+            // Extend by pin length
+            const len = pin.length ?? 0;
+            const rot = pin.at.rotation ?? 0;
+            const ex = px + len * Math.cos((rot * Math.PI) / 180);
+            const ey = py - len * Math.sin((rot * Math.PI) / 180);
+            minX = Math.min(minX, ex); minY = Math.min(minY, ey);
+            maxX = Math.max(maxX, ex); maxY = Math.max(maxY, ey);
+          }
+        }
+      };
+      collectBounds(this.libSymbol);
+      for (const child of this.libSymbol.children ?? []) {
+        const u = child.unit ?? 0;
+        if (u === 0 || u === this.unit) collectBounds(child);
+      }
+      if (minX !== Infinity) {
+        const pad = 0.5;
+        // Transform the bounds
+        const corners = [
+          this.transformPoint({ x: minX, y: minY }),
+          this.transformPoint({ x: maxX, y: minY }),
+          this.transformPoint({ x: minX, y: maxY }),
+          this.transformPoint({ x: maxX, y: maxY }),
+        ];
+        let bMinX = Infinity, bMinY = Infinity, bMaxX = -Infinity, bMaxY = -Infinity;
+        for (const c of corners) {
+          bMinX = Math.min(bMinX, c.x); bMinY = Math.min(bMinY, c.y);
+          bMaxX = Math.max(bMaxX, c.x); bMaxY = Math.max(bMaxY, c.y);
+        }
+        return { x: bMinX - pad, y: bMinY - pad, width: bMaxX - bMinX + pad * 2, height: bMaxY - bMinY + pad * 2 };
+      }
+    }
     // Calculate bbox from pin positions if available, otherwise use default
     if (this.pins.length > 0) {
       let minX = 0, minY = 0, maxX = 0, maxY = 0;
@@ -401,7 +456,6 @@ export class SchSymbol extends SchItem {
         if (dx > maxX) maxX = dx;
         if (dy > maxY) maxY = dy;
       }
-      // Add padding around pin extents
       const pad = 2;
       return {
         x: this.pos.x + minX - pad,

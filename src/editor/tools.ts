@@ -58,6 +58,7 @@ export class ToolManager {
   activeTool: ToolType = ToolType.SELECT;
   lineMode: LineMode = LineMode.ORTHO_90;
   callbacks: EditorCallback;
+  symLibrary: any = null; // SymbolLibrary reference
 
   // Wire drawing state
   private wireSegments: SchLine[] = [];
@@ -447,6 +448,30 @@ export class ToolManager {
     if (!libId) return;
 
     const symbol = new SchSymbol(evt.pos, libId);
+
+    // Look up LibSymbol from library and attach it
+    if (this.symLibrary) {
+      const libSym = this.symLibrary.findLibSymbol(libId);
+      if (libSym) {
+        symbol.libSymbol = libSym;
+        // Also populate pins from libSymbol
+        const allPins = [...(libSym.pins ?? [])];
+        for (const child of libSym.children ?? []) {
+          allPins.push(...(child.pins ?? []));
+        }
+        for (const pin of allPins) {
+          if (pin.at) {
+            symbol.pins.push({
+              number: pin.number?.text ?? "",
+              name: pin.name?.text ?? "",
+              pos: { x: pin.at.position.x, y: pin.at.position.y },
+              type: "unspecified",
+            });
+          }
+        }
+      }
+    }
+
     this.doc.commitAdd(symbol, "Place symbol");
     this.callbacks.requestRedraw();
   }

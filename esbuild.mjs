@@ -14,12 +14,9 @@ const extensionConfig = {
   sourcemap: true,
 };
 
-// Bundle the webview (browser, runs in VS Code webview)
-// kicanvas imports .css files as text strings for web component shadow DOM
-const webviewConfig = {
-  entryPoints: ["src/webview/main.ts"],
+// Shared webview config
+const webviewBase = {
   bundle: true,
-  outfile: "dist/webview.js",
   format: "iife",
   platform: "browser",
   target: "es2022",
@@ -35,15 +32,32 @@ const webviewConfig = {
   },
 };
 
+// Bundle the webview (browser, runs in VS Code webview)
+// kicanvas imports .css files as text strings for web component shadow DOM
+const webviewConfig = {
+  ...webviewBase,
+  entryPoints: ["src/webview/main.ts"],
+  outfile: "dist/webview.js",
+};
+
+// Bundle the project dashboard webview
+const projectWebviewConfig = {
+  ...webviewBase,
+  entryPoints: ["src/webview/project-main.ts"],
+  outfile: "dist/project-webview.js",
+};
+
 if (watch) {
   const extCtx = await esbuild.context(extensionConfig);
   const webCtx = await esbuild.context(webviewConfig);
-  await Promise.all([extCtx.watch(), webCtx.watch()]);
+  const projCtx = await esbuild.context(projectWebviewConfig);
+  await Promise.all([extCtx.watch(), webCtx.watch(), projCtx.watch()]);
   console.log("Watching for changes...");
 } else {
   await Promise.all([
     esbuild.build(extensionConfig),
     esbuild.build(webviewConfig),
+    esbuild.build(projectWebviewConfig),
   ]);
   console.log("Build complete.");
 }

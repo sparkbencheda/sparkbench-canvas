@@ -35,6 +35,16 @@
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "sparkbench.kicadPro",
+        "displayName": "KiCad Project Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.kicad_pro"
+          }
+        ],
+        "priority": "default"
       }
     ],
     "commands": [

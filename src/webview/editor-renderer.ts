@@ -232,6 +232,7 @@ export class EditorRenderer {
   private drawSymbol(sym: SchSymbol, selected: boolean) {
     const ctx = this.ctx;
     const color = selected ? COLORS.selected : COLORS.symbol;
+    const libSym = sym.libSymbol;
 
     ctx.save();
     ctx.translate(sym.pos.x, sym.pos.y);
@@ -240,17 +241,31 @@ export class EditorRenderer {
     if (sym.mirror === "y") ctx.scale(1, -1);
     ctx.rotate((sym.rotation * Math.PI) / 180);
 
-    // Draw placeholder box
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 0.15;
-    ctx.strokeRect(-2.54, -2.54, 5.08, 5.08);
+    if (libSym) {
+      // Draw real symbol geometry
+      const drawUnit = (unit: any) => {
+        this.drawLibSymbolDrawings(ctx, unit, color);
+        this.drawLibSymbolPins(ctx, unit, color, libSym);
+      };
 
-    // Draw pins as small circles
-    for (const pin of sym.pins) {
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.arc(pin.pos.x, pin.pos.y, 0.25, 0, Math.PI * 2);
-      ctx.fill();
+      // Draw unit 0 (common to all units)
+      drawUnit(libSym);
+      for (const child of libSym.children ?? []) {
+        const u = child.unit ?? 0;
+        if (u === 0 || u === sym.unit) drawUnit(child);
+      }
+    } else {
+      // Fallback placeholder box
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 0.15;
+      ctx.strokeRect(-2.54, -2.54, 5.08, 5.08);
+
+      for (const pin of sym.pins) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(pin.pos.x, pin.pos.y, 0.25, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     ctx.restore();
@@ -265,6 +280,200 @@ export class EditorRenderer {
       const worldPos = sym.transformPoint(field.pos);
       ctx.fillText(field.text, worldPos.x, worldPos.y);
     }
+  }
+
+  private drawLibSymbolDrawings(ctx: CanvasRenderingContext2D, unit: any, color: string) {
+    const DEFAULT_WIDTH = 0.1524;
+    const BG_FILL = "#2a2a1e";
+
+    for (const d of unit.drawings ?? []) {
+      const strokeWidth = d.stroke?.width || DEFAULT_WIDTH;
+      const fillType = d.fill?.type ?? "none";
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = strokeWidth;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      // Rectangle
+      if (d.start && d.end && !d.mid) {
+        const x = Math.min(d.start.x, d.end.x);
+        const y = Math.min(d.start.y, d.end.y);
+        const w = Math.abs(d.end.x - d.start.x);
+        const h = Math.abs(d.end.y - d.start.y);
+
+        if (fillType === "background") {
+          ctx.fillStyle = BG_FILL;
+          ctx.fillRect(x, y, w, h);
+        } else if (fillType === "outline") {
+          ctx.fillStyle = color;
+          ctx.fillRect(x, y, w, h);
+        }
+        ctx.strokeRect(x, y, w, h);
+        continue;
+      }
+
+      // Polyline
+      if (d.pts && d.pts.length >= 2) {
+        ctx.beginPath();
+        ctx.moveTo(d.pts[0].x, d.pts[0].y);
+        for (let i = 1; i < d.pts.length; i++) {
+          ctx.lineTo(d.pts[i].x, d.pts[i].y);
+        }
+        if (fillType === "background") {
+          ctx.fillStyle = BG_FILL;
+          ctx.fill();
+        } else if (fillType === "outline") {
+          ctx.fillStyle = color;
+          ctx.fill();
+        }
+        ctx.stroke();
+        continue;
+      }
+
+      // Circle
+      if (d.center && d.radius != null) {
+        ctx.beginPath();
+        ctx.arc(d.center.x, d.center.y, d.radius, 0, Math.PI * 2);
+        if (fillType === "background") {
+          ctx.fillStyle = BG_FILL;
+          ctx.fill();
+        } else if (fillType === "outline") {
+          ctx.fillStyle = color;
+          ctx.fill();
+        }
+        ctx.stroke();
+        continue;
+      }
+
+      // Arc (3-point: start, mid, end)
+      if (d.start && d.mid && d.end) {
+        const arc = this.computeArcFromThreePoints(d.start, d.mid, d.end);
+        if (arc) {
+          ctx.beginPath();
+          ctx.arc(arc.cx, arc.cy, arc.r, arc.startAngle, arc.endAngle, arc.ccw);
+          if (fillType === "background") {
+            ctx.fillStyle = BG_FILL;
+            ctx.fill();
+          } else if (fillType === "outline") {
+            ctx.fillStyle = color;
+            ctx.fill();
+          }
+          ctx.stroke();
+        }
+        continue;
+      }
+    }
+  }
+
+  private drawLibSymbolPins(
+    ctx: CanvasRenderingContext2D,
+    unit: any,
+    color: string,
+    rootSym: any,
+  ) {
+    const hidePinNumbers = rootSym.pin_numbers?.hide ?? false;
+    const hidePinNames = rootSym.pin_names?.hide ?? false;
+    const pinNameOffset = rootSym.pin_names?.offset ?? 0.508;
+
+    for (const pin of unit.pins ?? []) {
+      if (pin.hide) continue;
+      if (!pin.at) continue;
+
+      const px = pin.at.position.x;
+      const py = pin.at.position.y;
+      const rot = pin.at.rotation ?? 0;
+      const len = pin.length ?? 2.54;
+
+      // Pin direction: rotation 0 = right, 90 = up, 180 = left, 270 = down
+      const rad = (rot * Math.PI) / 180;
+      const dx = Math.cos(rad);
+      const dy = -Math.sin(rad);
+
+      // Draw pin line
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 0.1524;
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + dx * len, py + dy * len);
+      ctx.stroke();
+
+      // Pin endpoint circle
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(px, py, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Draw pin name (inside the symbol body, offset from pin end)
+      if (!hidePinNames && pin.name?.text && pin.name.text !== "~") {
+        ctx.save();
+        ctx.translate(px + dx * len, py + dy * len);
+        ctx.rotate(-rad);
+        ctx.fillStyle = color;
+        ctx.font = "1.0px sans-serif";
+        ctx.textBaseline = "middle";
+        ctx.textAlign = "left";
+        ctx.fillText(pin.name.text, pinNameOffset, 0);
+        ctx.restore();
+      }
+
+      // Draw pin number (outside, along the pin line)
+      if (!hidePinNumbers && pin.number?.text) {
+        ctx.save();
+        ctx.translate(px + dx * len * 0.5, py + dy * len * 0.5);
+        ctx.rotate(-rad);
+        ctx.fillStyle = color;
+        ctx.font = "0.8px sans-serif";
+        ctx.textBaseline = "bottom";
+        ctx.textAlign = "center";
+        ctx.fillText(pin.number.text, 0, -0.3);
+        ctx.restore();
+      }
+    }
+  }
+
+  private computeArcFromThreePoints(
+    start: { x: number; y: number },
+    mid: { x: number; y: number },
+    end: { x: number; y: number },
+  ): { cx: number; cy: number; r: number; startAngle: number; endAngle: number; ccw: boolean } | null {
+    // Find circumscribed circle center from 3 points
+    const ax = start.x, ay = start.y;
+    const bx = mid.x, by = mid.y;
+    const cx = end.x, cy = end.y;
+
+    const D = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if (Math.abs(D) < 1e-10) return null;
+
+    const ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / D;
+    const uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / D;
+
+    const r = Math.sqrt((ax - ux) ** 2 + (ay - uy) ** 2);
+    const startAngle = Math.atan2(ay - uy, ax - ux);
+    const midAngle = Math.atan2(by - uy, bx - ux);
+    const endAngle = Math.atan2(cy - uy, cx - ux);
+
+    // Determine direction: check if mid is on the CCW arc from start to end
+    const cross = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    const ccw = cross > 0;
+
+    // Verify mid is between start and end on the chosen arc
+    const normalizeAngle = (a: number) => (a + 2 * Math.PI) % (2 * Math.PI);
+    const ns = normalizeAngle(startAngle);
+    const nm = normalizeAngle(midAngle);
+    const ne = normalizeAngle(endAngle);
+
+    // Check if mid falls on the shorter arc; if not, flip direction
+    let betweenCCW: boolean;
+    if (ns <= ne) {
+      betweenCCW = nm >= ns && nm <= ne;
+    } else {
+      betweenCCW = nm >= ns || nm <= ne;
+    }
+
+    const actualCCW = betweenCCW ? false : true;
+
+    return { cx: ux, cy: uy, r, startAngle, endAngle, ccw: actualCCW };
   }
 
   private drawSheet(sheet: SchSheet, selected: boolean) {

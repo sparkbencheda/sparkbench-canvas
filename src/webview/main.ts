@@ -8,6 +8,7 @@ import { LocalFileSystem } from "../../vendor-kicanvas/src/kicanvas/services/vfs
 import themes from "../../vendor-kicanvas/src/kicanvas/themes/index";
 import { EditorOverlay } from "./editor-overlay";
 import { ToolType } from "../editor/tools";
+import { SymbolLibrary } from "./symbol-library";
 
 declare global {
   interface Window {
@@ -137,8 +138,8 @@ function buildLayerPanel(viewer: BoardViewer, board: KicadPCB) {
     "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab", "Edge.Cuts", "Dwgs.User",
   ];
   const innerLayers = board.layers
-    .map((l: any) => l.name)
-    .filter((n: string) => n.startsWith("In") && n.endsWith(".Cu"));
+    .map((l: any) => l.canonical_name || l.name)
+    .filter((n: string) => n && n.startsWith("In") && n.endsWith(".Cu"));
   const allLayers = [...mainLayers, ...innerLayers];
 
   let html = '<div class="panel-section"><div class="panel-section-title">Board Layers</div>';
@@ -428,10 +429,14 @@ async function showPage(page: ProjectPage) {
       await viewer.load(doc);
 
       wireViewerEvents(viewer);
-      buildLayerPanel(viewer, doc);
-      buildFootprintPanel(viewer, doc);
-      buildNetPanel(viewer, doc);
-      buildInfoPanel(doc, currentProject);
+      try {
+        buildLayerPanel(viewer, doc);
+        buildFootprintPanel(viewer, doc);
+        buildNetPanel(viewer, doc);
+        buildInfoPanel(doc, currentProject);
+      } catch (panelErr) {
+        console.warn("Panel build error (non-fatal):", panelErr);
+      }
 
       document.getElementById("btn-flip")?.style.setProperty("display", "");
     } else if (doc instanceof KicadSch) {
@@ -620,7 +625,8 @@ function toggleEditMode() {
 
     // Create overlay if needed, importing current schematic data
     if (!editorOverlay) {
-      editorOverlay = new EditorOverlay(canvasContainer, editorStatusEl, currentSch ?? undefined);
+      const symLib = SymbolLibrary.build(currentSch, projectFiles);
+      editorOverlay = new EditorOverlay(canvasContainer, editorStatusEl, currentSch ?? undefined, symLib);
       editorOverlay.canvas.dataset.editor = "true";
     }
     editorOverlay.canvas.style.display = "block";

@@ -4,6 +4,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     KicadEditorProvider.register(context, "sparkbench.kicadPcb", "pcb"),
     KicadEditorProvider.register(context, "sparkbench.kicadSch", "schematic"),
+    KicadEditorProvider.register(context, "sparkbench.kicadPro", "project"),
   );
 }
 
@@ -14,16 +15,19 @@ const PROJECT_EXTENSIONS = [
   ".kicad_pcb",
   ".kicad_sch",
   ".kicad_pro",
+  ".kicad_sym",
 ];
+
+const PROJECT_EXACT_NAMES = ["sym-lib-table", "fp-lib-table"];
 
 class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
   private readonly viewType: string;
-  private readonly fileType: "pcb" | "schematic";
+  private readonly fileType: "pcb" | "schematic" | "project";
 
   static register(
     context: vscode.ExtensionContext,
     viewType: string,
-    fileType: "pcb" | "schematic",
+    fileType: "pcb" | "schematic" | "project",
   ): vscode.Disposable {
     const provider = new KicadEditorProvider(context, viewType, fileType);
     return vscode.window.registerCustomEditorProvider(viewType, provider, {
@@ -35,7 +39,7 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
   constructor(
     private readonly context: vscode.ExtensionContext,
     viewType: string,
-    fileType: "pcb" | "schematic",
+    fileType: "pcb" | "schematic" | "project",
   ) {
     this.viewType = viewType;
     this.fileType = fileType;
@@ -67,7 +71,7 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
 
         const isProjectFile = PROJECT_EXTENSIONS.some((ext) =>
           name.endsWith(ext),
-        );
+        ) || PROJECT_EXACT_NAMES.includes(name);
         if (!isProjectFile) continue;
 
         try {
@@ -111,6 +115,19 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
       projectFiles,
     );
 
+    // Handle messages from webview
+    webviewPanel.webview.onDidReceiveMessage(async (msg) => {
+      if (msg.type === "openFile") {
+        const dir = vscode.Uri.joinPath(document.uri, "..");
+        const fileUri = vscode.Uri.joinPath(dir, msg.fileName);
+        try {
+          await vscode.commands.executeCommand("vscode.openWith", fileUri);
+        } catch {
+          await vscode.commands.executeCommand("vscode.open", fileUri);
+        }
+      }
+    });
+
     // Watch for file changes
     const dir = vscode.Uri.joinPath(document.uri, "..");
     const pattern = new vscode.RelativePattern(dir, "*.kicad_*");
@@ -137,11 +154,64 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
     fileName: string,
     projectFiles: Record<string, string>,
   ): string {
+    const nonce = getNonce();
+
+    if (this.fileType === "project") {
+      const scriptUri = webview.asWebviewUri(
+        vscode.Uri.joinPath(this.context.extensionUri, "dist", "project-webview.js"),
+      );
+      return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' 'unsafe-eval'; style-src 'unsafe-inline'; font-src data:;">
+  <style>
+    :root {
+      --bg: #1e1e1e; --bg-raised: #252526; --bg-hover: #2a2d2e;
+      --bg-active: #37373d; --border: #3c3c3c;
+      --fg: #cccccc; --fg-dim: #858585; --fg-bright: #e0e0e0;
+      --accent: #0078d4; --accent-hover: #1c8ae8;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow-y: auto; background: var(--bg); color: var(--fg); font-family: system-ui, -apple-system, sans-serif; font-size: 13px; }
+    #dashboard { max-width: 900px; margin: 0 auto; padding: 24px; }
+    h1 { color: var(--fg-bright); font-size: 20px; margin-bottom: 4px; }
+    .subtitle { color: var(--fg-dim); font-size: 12px; margin-bottom: 20px; }
+    .card { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 12px; }
+    .card-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--fg-dim); margin-bottom: 10px; font-weight: 600; }
+    .card-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .kv { display: flex; gap: 8px; font-size: 12px; padding: 2px 0; }
+    .kv-label { color: var(--fg-dim); min-width: 100px; }
+    .kv-value { color: var(--fg-bright); word-break: break-all; }
+    .file-link { color: var(--accent); cursor: pointer; padding: 4px 8px; border-radius: 3px; font-size: 12px; display: inline-block; }
+    .file-link:hover { background: var(--bg-hover); color: var(--accent-hover); text-decoration: underline; }
+    .lib-item { padding: 4px 8px; border-radius: 3px; font-size: 12px; display: flex; justify-content: space-between; }
+    .lib-item:nth-child(even) { background: var(--bg-hover); }
+    .lib-name { color: var(--fg-bright); }
+    .lib-detail { color: var(--fg-dim); }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    th { text-align: left; color: var(--fg-dim); padding: 4px 8px; border-bottom: 1px solid var(--border); font-weight: 600; }
+    td { padding: 4px 8px; border-bottom: 1px solid var(--border); color: var(--fg-bright); }
+    tr:hover { background: var(--bg-hover); }
+  </style>
+</head>
+<body>
+  <div id="dashboard"></div>
+  <script nonce="${nonce}">
+    window.__KICAD_FILE_CONTENT__ = ${JSON.stringify(content)};
+    window.__KICAD_FILE_NAME__ = ${JSON.stringify(fileName)};
+    window.__KICAD_PROJECT_FILES__ = ${JSON.stringify(projectFiles)};
+  </script>
+  <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+    }
+
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, "dist", "webview.js"),
     );
 
-    const nonce = getNonce();
     const isPcb = this.fileType === "pcb";
 
     return `<!DOCTYPE html>

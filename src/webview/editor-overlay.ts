@@ -5,6 +5,7 @@ import { ToolManager, ToolType, type ToolEvent } from "../editor/tools";
 import { EditorRenderer, type ViewTransform } from "./editor-renderer";
 import type { KicadSch } from "../../vendor-kicanvas/src/kicad";
 import { importKicadSch } from "./sch-import";
+import { SymbolLibrary } from "./symbol-library";
 
 export class EditorOverlay {
   readonly doc: SchematicDoc;
@@ -20,8 +21,9 @@ export class EditorOverlay {
   private statusEl: HTMLElement | null = null;
   private animFrameId = 0;
   private needsRedraw = false;
+  symLibrary: SymbolLibrary;
 
-  constructor(container: HTMLElement, statusEl?: HTMLElement, kicadSch?: KicadSch) {
+  constructor(container: HTMLElement, statusEl?: HTMLElement, kicadSch?: KicadSch, symLibrary?: SymbolLibrary) {
     this.canvas = document.createElement("canvas");
     this.canvas.style.position = "absolute";
     this.canvas.style.inset = "0";
@@ -34,6 +36,7 @@ export class EditorOverlay {
 
     this.statusEl = statusEl ?? null;
     this.renderer = new EditorRenderer(this.canvas);
+    this.symLibrary = symLibrary ?? new SymbolLibrary();
 
     // Import existing schematic data if provided
     this.doc = kicadSch ? importKicadSch(kicadSch) : new SchematicDoc("editor");
@@ -45,6 +48,7 @@ export class EditorOverlay {
       showStatus: (msg) => this.showStatus(msg),
       setCursor: (cursor) => { this.canvas.style.cursor = cursor; },
     });
+    this.tools.symLibrary = this.symLibrary;
 
     this.setupEvents();
     this.renderer.resize();
@@ -209,9 +213,93 @@ export class EditorOverlay {
     this.renderer.drawCrosshair(this.cursorPos);
   }
 
-  private async promptSymbol(): Promise<string | null> {
-    const libId = prompt("Enter symbol library ID (e.g., Device:R):");
-    return libId || null;
+  private promptSymbol(): Promise<string | null> {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;display:flex;align-items:center;justify-content:center;";
+
+      const modal = document.createElement("div");
+      modal.style.cssText = "background:#252526;border:1px solid #3c3c3c;border-radius:6px;width:420px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
+
+      const header = document.createElement("div");
+      header.style.cssText = "padding:12px 16px;border-bottom:1px solid #3c3c3c;font-size:13px;color:#e0e0e0;font-weight:600;";
+      header.textContent = `Choose Symbol (${this.symLibrary.size} available)`;
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.placeholder = "Search symbols...";
+      input.style.cssText = "margin:8px 12px;padding:6px 10px;background:#1e1e1e;border:1px solid #3c3c3c;border-radius:4px;color:#ccc;font-size:12px;outline:none;";
+
+      const list = document.createElement("div");
+      list.style.cssText = "flex:1;overflow-y:auto;padding:4px 0;min-height:100px;max-height:50vh;";
+
+      modal.appendChild(header);
+      modal.appendChild(input);
+      modal.appendChild(list);
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      let debounceTimer: number;
+
+      const renderList = (query: string) => {
+        const results = this.symLibrary.search(query);
+        const grouped = new Map<string, typeof results>();
+        for (const r of results) {
+          const g = grouped.get(r.libraryName) ?? [];
+          g.push(r);
+          grouped.set(r.libraryName, g);
+        }
+
+        let html = "";
+        for (const [lib, entries] of grouped) {
+          html += `<div style="padding:4px 12px;font-size:10px;color:#858585;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px;">${esc(lib)}</div>`;
+          for (const e of entries) {
+            html += `<div class="sym-item" data-id="${esc(e.fullId)}" style="padding:4px 16px;font-size:12px;color:#ccc;cursor:pointer;border-radius:3px;margin:0 4px;">${esc(e.symbolName)}</div>`;
+          }
+        }
+        if (results.length === 0) {
+          html = `<div style="padding:16px;color:#858585;text-align:center;">No symbols found</div>`;
+        }
+        list.innerHTML = html;
+
+        list.querySelectorAll(".sym-item").forEach((el) => {
+          el.addEventListener("mouseenter", () => (el as HTMLElement).style.background = "#2a2d2e");
+          el.addEventListener("mouseleave", () => (el as HTMLElement).style.background = "");
+          el.addEventListener("click", () => {
+            cleanup();
+            resolve((el as HTMLElement).dataset.id!);
+          });
+        });
+      };
+
+      const cleanup = () => {
+        document.body.removeChild(overlay);
+      };
+
+      input.addEventListener("input", () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = window.setTimeout(() => renderList(input.value), 100);
+      });
+
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) { cleanup(); resolve(null); }
+      });
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") { e.stopPropagation(); cleanup(); resolve(null); }
+        if (e.key === "Enter") {
+          const first = list.querySelector(".sym-item") as HTMLElement | null;
+          if (first) { cleanup(); resolve(first.dataset.id!); }
+        }
+      });
+
+      renderList("");
+      setTimeout(() => input.focus(), 0);
+
+      function esc(s: string): string {
+        return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      }
+    });
   }
 
   private async promptLabel(current?: string): Promise<string | null> {
