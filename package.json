@@ -52,7 +52,22 @@
         "command": "sparkbench.openKicadViewer",
         "title": "SparkBench: Open KiCad Viewer"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "SparkBench KiCad",
+      "properties": {
+        "sparkbench.useSystemKicadLibraries": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use symbol libraries from the system KiCad installation for the symbol chooser."
+        },
+        "sparkbench.kicadLibraryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to KiCad symbol libraries directory. Leave empty to auto-detect from KiCad installation."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "node esbuild.mjs",

@@ -9,6 +9,7 @@ import themes from "../../vendor-kicanvas/src/kicanvas/themes/index";
 import { EditorOverlay } from "./editor-overlay";
 import { ToolType } from "../editor/tools";
 import { SymbolLibrary } from "./symbol-library";
+import { exportToKicadSch } from "./sch-export";
 
 declare global {
   interface Window {
@@ -626,8 +627,14 @@ function toggleEditMode() {
     // Create overlay if needed, importing current schematic data
     if (!editorOverlay) {
       const symLib = SymbolLibrary.build(currentSch, projectFiles);
+      if (globalLibraryIndex) {
+        symLib.addGlobalIndex(globalLibraryIndex);
+      }
       editorOverlay = new EditorOverlay(canvasContainer, editorStatusEl, currentSch ?? undefined, symLib);
       editorOverlay.canvas.dataset.editor = "true";
+      editorOverlay.onRequestLibrary = (libraryName) => {
+        vscode.postMessage({ type: "requestLibrary", libraryName });
+      };
     }
     editorOverlay.canvas.style.display = "block";
   } else {
@@ -706,11 +713,43 @@ loadProject(projectFiles, primaryFileName).catch((err) => {
   loadingText.style.color = "#f44";
 });
 
-// Handle file updates from the extension
+// Global library index received from extension
+let globalLibraryIndex: { libraries: { name: string; symbolNames: string[] }[] } | null = null;
+
+// Handle messages from the extension
 window.addEventListener("message", (event) => {
   const msg = event.data;
   if (msg.type === "update") {
     const updatedFiles = msg.projectFiles ?? { [msg.fileName]: msg.content };
     loadProject(updatedFiles, msg.fileName).catch(console.error);
   }
+  if (msg.type === "requestSave") {
+    if (editorOverlay) {
+      const content = exportToKicadSch(editorOverlay.doc, primaryContent);
+      vscode.postMessage({ type: "saveContent", content });
+      editorOverlay.doc.dirty = false;
+    } else {
+      vscode.postMessage({ type: "saveContent", content: primaryContent });
+    }
+  }
+  if (msg.type === "globalLibraryIndex") {
+    globalLibraryIndex = msg.index;
+    // If editor overlay already exists, add the index
+    if (editorOverlay) {
+      editorOverlay.symLibrary.addGlobalIndex(msg.index);
+    }
+  }
+  if (msg.type === "libraryContent") {
+    // On-demand library content received — add to the symbol library
+    if (editorOverlay) {
+      editorOverlay.symLibrary.loadLibraryContent(msg.libraryName, msg.content);
+    }
+  }
 });
+
+// Notify extension when editor state becomes dirty
+setInterval(() => {
+  if (editorOverlay?.doc.dirty) {
+    vscode.postMessage({ type: "dirty" });
+  }
+}, 500);

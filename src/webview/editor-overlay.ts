@@ -22,6 +22,7 @@ export class EditorOverlay {
   private animFrameId = 0;
   private needsRedraw = false;
   symLibrary: SymbolLibrary;
+  onRequestLibrary: ((libraryName: string) => void) | null = null;
 
   constructor(container: HTMLElement, statusEl?: HTMLElement, kicadSch?: KicadSch, symLibrary?: SymbolLibrary) {
     this.canvas = document.createElement("canvas");
@@ -164,6 +165,9 @@ export class EditorOverlay {
       if (e.key === "z" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
       }
+      if (e.key === "s" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+      }
       if (e.key === "Escape") {
         e.preventDefault();
       }
@@ -266,13 +270,41 @@ export class EditorOverlay {
           el.addEventListener("mouseenter", () => (el as HTMLElement).style.background = "#2a2d2e");
           el.addEventListener("mouseleave", () => (el as HTMLElement).style.background = "");
           el.addEventListener("click", () => {
-            cleanup();
-            resolve((el as HTMLElement).dataset.id!);
+            const fullId = (el as HTMLElement).dataset.id!;
+            if (!this.symLibrary.isLoaded(fullId)) {
+              // Request library content from extension
+              const libName = fullId.split(":")[0]!;
+              if (this.onRequestLibrary) {
+                this.onRequestLibrary(libName);
+              }
+              // Show loading state, wait for library to load
+              (el as HTMLElement).textContent = "Loading...";
+              (el as HTMLElement).style.color = "#858585";
+              const checkLoaded = setInterval(() => {
+                if (this.symLibrary.isLoaded(fullId)) {
+                  clearInterval(checkLoaded);
+                  cleanup();
+                  resolve(fullId);
+                }
+              }, 100);
+              // Timeout after 5 seconds
+              setTimeout(() => {
+                clearInterval(checkLoaded);
+                if (document.body.contains(overlay)) {
+                  (el as HTMLElement).textContent = "Failed to load";
+                  (el as HTMLElement).style.color = "#f44";
+                }
+              }, 5000);
+            } else {
+              cleanup();
+              resolve(fullId);
+            }
           });
         });
       };
 
       const cleanup = () => {
+        clearTimeout(debounceTimer);
         document.body.removeChild(overlay);
       };
 
@@ -302,9 +334,52 @@ export class EditorOverlay {
     });
   }
 
-  private async promptLabel(current?: string): Promise<string | null> {
-    const text = prompt("Enter label text:", current ?? "");
-    return text || null;
+  private promptLabel(current?: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;display:flex;align-items:center;justify-content:center;";
+
+      const modal = document.createElement("div");
+      modal.style.cssText = "background:#252526;border:1px solid #3c3c3c;border-radius:6px;width:320px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
+
+      const label = document.createElement("div");
+      label.style.cssText = "font-size:13px;color:#e0e0e0;font-weight:600;margin-bottom:8px;";
+      label.textContent = "Enter label text";
+
+      const input = document.createElement("input");
+      input.type = "text";
+      input.value = current ?? "";
+      input.style.cssText = "width:100%;padding:6px 10px;background:#1e1e1e;border:1px solid #3c3c3c;border-radius:4px;color:#ccc;font-size:12px;outline:none;box-sizing:border-box;";
+
+      modal.appendChild(label);
+      modal.appendChild(input);
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      const cleanup = () => {
+        document.body.removeChild(overlay);
+      };
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.stopPropagation();
+          const text = input.value.trim();
+          cleanup();
+          resolve(text || null);
+        }
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          cleanup();
+          resolve(null);
+        }
+      });
+
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) { cleanup(); resolve(null); }
+      });
+
+      setTimeout(() => input.focus(), 0);
+    });
   }
 
   private showStatus(msg: string) {

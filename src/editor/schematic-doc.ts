@@ -4,7 +4,7 @@
 import { SchItem, SchLine, SchJunction, SchLabel, SchSymbol } from "./items";
 import { UndoStack, ChangeType } from "./undo";
 import type { Vec2, BBox } from "./types";
-import { bboxContains } from "./types";
+import { bboxContains, vec2Eq } from "./types";
 
 export class SchematicDoc {
   private items: Map<string, SchItem> = new Map();
@@ -13,6 +13,7 @@ export class SchematicDoc {
   title = "";
   revision = "";
   paperSize = "A4";
+  dirty = false;
 
   constructor(fileName: string) {
     this.fileName = fileName;
@@ -110,7 +111,7 @@ export class SchematicDoc {
       if (!item.isConnectable()) continue;
 
       for (const cp of item.getConnectionPoints()) {
-        if (Math.abs(cp.x - pos.x) < 0.01 && Math.abs(cp.y - pos.y) < 0.01) {
+        if (vec2Eq(cp, pos)) {
           results.push(item);
           break;
         }
@@ -127,14 +128,14 @@ export class SchematicDoc {
     for (const item of this.items.values()) {
       if (item instanceof SchLine && item.layer === "wire") {
         for (const cp of item.getConnectionPoints()) {
-          if (Math.abs(cp.x - pos.x) < 0.01 && Math.abs(cp.y - pos.y) < 0.01) {
+          if (vec2Eq(cp, pos)) {
             wireCount++;
             break;
           }
         }
       } else if (item instanceof SchSymbol) {
         for (const pinPos of item.getPinPositions()) {
-          if (Math.abs(pinPos.x - pos.x) < 0.01 && Math.abs(pinPos.y - pos.y) < 0.01) {
+          if (vec2Eq(pinPos, pos)) {
             pinCount++;
             break;
           }
@@ -147,7 +148,7 @@ export class SchematicDoc {
 
   hasJunctionAt(pos: Vec2): boolean {
     for (const j of this.junctions()) {
-      if (Math.abs(j.pos.x - pos.x) < 0.01 && Math.abs(j.pos.y - pos.y) < 0.01) {
+      if (vec2Eq(j.pos, pos)) {
         return true;
       }
     }
@@ -160,12 +161,14 @@ export class SchematicDoc {
     this.undo.stage(item, ChangeType.ADD);
     this.addItem(item);
     this.undo.push(description, () => {});
+    this.dirty = true;
   }
 
   commitRemove(item: SchItem, description: string): void {
     this.undo.stage(item, ChangeType.REMOVE);
     this.removeItem(item);
     this.undo.push(description, () => {});
+    this.dirty = true;
   }
 
   commitModify(item: SchItem): void {
@@ -174,6 +177,7 @@ export class SchematicDoc {
 
   commitPush(description: string): void {
     this.undo.push(description, () => {});
+    this.dirty = true;
   }
 
   performUndo(): string | null {

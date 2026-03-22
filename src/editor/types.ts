@@ -94,6 +94,15 @@ export interface StrokeParams {
   style?: "solid" | "dash" | "dot" | "dash_dot";
 }
 
+// Symbol library interface (avoids circular dependency with webview/)
+// Uses LibSymbol from vendor-kicanvas
+import type { LibSymbol } from "../../vendor-kicanvas/src/kicad/schematic";
+export type { LibSymbol };
+
+export interface ISymbolLibrary {
+  findLibSymbol(libId: string): LibSymbol | undefined;
+}
+
 // Flags for items during editing operations
 export const IS_NEW = 1 << 0;
 export const IS_MOVING = 1 << 1;

@@ -11,7 +11,7 @@ export interface SymbolEntry {
   fullId: string;       // "LibName:SymbolName"
   libraryName: string;
   symbolName: string;
-  libSymbol: LibSymbol;
+  libSymbol: LibSymbol | null; // null = stub from global index, not yet loaded
 }
 
 /** Parse a sym-lib-table file and extract (name, uri) pairs */
@@ -151,13 +151,51 @@ export class SymbolLibrary {
   /** Get a LibSymbol matching a lib_id (tries exact match, then name-only match) */
   findLibSymbol(libId: string): LibSymbol | undefined {
     const entry = this.byFullId.get(libId);
-    if (entry) return entry.libSymbol;
+    if (entry?.libSymbol) return entry.libSymbol;
 
     // Try matching by symbol name only (without library prefix)
     const nameOnly = libId.includes(":") ? libId.split(":").slice(1).join(":") : libId;
     for (const e of this.entries) {
-      if (e.symbolName === nameOnly) return e.libSymbol;
+      if (e.symbolName === nameOnly && e.libSymbol) return e.libSymbol;
     }
     return undefined;
+  }
+
+  /** Add stub entries from a global library index (symbol names only, no parsed data) */
+  addGlobalIndex(index: { libraries: { name: string; symbolNames: string[] }[] }): void {
+    for (const lib of index.libraries) {
+      for (const symName of lib.symbolNames) {
+        const fullId = `${lib.name}:${symName}`;
+        if (!this.byFullId.has(fullId)) {
+          const entry: SymbolEntry = { fullId, libraryName: lib.name, symbolName: symName, libSymbol: null };
+          this.entries.push(entry);
+          this.byFullId.set(fullId, entry);
+        }
+      }
+    }
+  }
+
+  /** Load a full library file, replacing stubs with real LibSymbol data */
+  loadLibraryContent(libraryName: string, content: string): void {
+    const symbols = parseKicadSymFile(content);
+    for (const sym of symbols) {
+      if (sym.parent instanceof LibSymbol) continue;
+      const symName = sym.name.includes(":")
+        ? sym.name.split(":").slice(1).join(":")
+        : sym.name;
+      const fullId = `${libraryName}:${symName}`;
+      const existing = this.byFullId.get(fullId);
+      if (existing) {
+        existing.libSymbol = sym;
+      } else {
+        this.addEntry(libraryName, symName, sym);
+      }
+    }
+  }
+
+  /** Check if an entry's library data is loaded */
+  isLoaded(fullId: string): boolean {
+    const entry = this.byFullId.get(fullId);
+    return entry?.libSymbol != null;
   }
 }

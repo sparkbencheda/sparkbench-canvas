@@ -35,7 +35,7 @@ export function importKicadSch(sch: KicadSch): SchematicDoc {
 
   // Import buses
   for (const bus of sch.buses) {
-    importWire(doc, bus as any, "bus");
+    importWire(doc, bus, "bus");
   }
 
   // Import junctions
@@ -97,8 +97,9 @@ function importWire(
   for (let i = 0; i < pts.length - 1; i++) {
     const start = { x: pts[i]!.x, y: pts[i]!.y };
     const end = { x: pts[i + 1]!.x, y: pts[i + 1]!.y };
-    const id = i === 0 ? wire.uuid : `${wire.uuid}-${i}`;
-    const line = new SchLine(start, end, layer, id);
+    const line = new SchLine(start, end, layer);
+    line.originalUuid = wire.uuid;
+    line.segmentIndex = i;
     if (wire.stroke?.width) {
       line.stroke.width = wire.stroke.width;
     }
@@ -175,8 +176,8 @@ function importSymbol(doc: SchematicDoc, sym: SchematicSymbol) {
         }
       }
     }
-  } catch {
-    // lib_symbol may not be available
+  } catch (e) {
+    console.warn(`Failed to load lib_symbol for ${sym.lib_id}:`, e);
   }
 
   doc.addItem(symbol);

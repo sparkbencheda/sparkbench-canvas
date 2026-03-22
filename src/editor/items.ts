@@ -7,6 +7,7 @@ import {
   type StrokeParams,
   type LabelShape,
   type SpinStyle,
+  type LibSymbol,
   vec2,
   vec2Add,
   bboxFromPoints,
@@ -47,17 +48,20 @@ export abstract class SchItem {
 export type LineLayer = "wire" | "bus" | "notes";
 
 export class SchLine extends SchItem {
-  readonly itemType = "wire";
+  readonly itemType: SchItemType;
   start: Vec2;
   end: Vec2;
   layer: LineLayer;
   stroke: StrokeParams;
+  originalUuid?: string;  // For polyline reconstruction on export
+  segmentIndex?: number;
 
   constructor(start: Vec2, end: Vec2, layer: LineLayer = "wire", id?: string) {
     super(id);
     this.start = { ...start };
     this.end = { ...end };
     this.layer = layer;
+    this.itemType = layer === "bus" ? "bus" : "wire";
     this.stroke = {
       width: layer === "bus" ? 0.3 : 0.15,
       style: "solid",
@@ -68,6 +72,8 @@ export class SchLine extends SchItem {
     const c = new SchLine(this.start, this.end, this.layer);
     c.stroke = { ...this.stroke };
     c.flags = this.flags;
+    c.originalUuid = this.originalUuid;
+    c.segmentIndex = this.segmentIndex;
     return c;
   }
 
@@ -162,8 +168,8 @@ export class SchJunction extends SchItem {
     this.pos = vec2Add(this.pos, delta);
   }
 
-  rotate(_center: Vec2, _ccw: boolean): void {
-    // Junctions are circular, no rotation needed (but position rotates)
+  rotate(center: Vec2, ccw: boolean): void {
+    this.pos = rotatePoint(this.pos, center, ccw);
   }
 
   mirrorH(centerX: number): void {
@@ -296,7 +302,9 @@ export class SchNoConnect extends SchItem {
     this.pos = vec2Add(this.pos, delta);
   }
 
-  rotate(_center: Vec2, _ccw: boolean): void {}
+  rotate(center: Vec2, ccw: boolean): void {
+    this.pos = rotatePoint(this.pos, center, ccw);
+  }
 
   mirrorH(centerX: number): void {
     this.pos = { x: 2 * centerX - this.pos.x, y: this.pos.y };
@@ -341,7 +349,7 @@ export class SchSymbol extends SchItem {
   mirror: "none" | "x" | "y";
   fields: SymbolField[];
   pins: SymbolPin[];
-  libSymbol: any; // kicanvas LibSymbol reference for rendering
+  libSymbol: LibSymbol | null;
 
   constructor(pos: Vec2, libId: string, id?: string) {
     super(id);
@@ -357,6 +365,7 @@ export class SchSymbol extends SchItem {
       { name: "Footprint", text: "", pos: vec2(0, 5.08), visible: false },
     ];
     this.pins = [];
+    this.libSymbol = null;
   }
 
   get reference(): string {

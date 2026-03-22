@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import * as fs from "fs";
+import * as path from "path";
 
 export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
@@ -10,6 +12,205 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {}
 
+// ==================== KiCad Library System ====================
+// Mirrors KiCad's sym-lib-table architecture:
+// 1. Global sym-lib-table in user config dir (can reference nested Table entries)
+// 2. Project sym-lib-table in project dir (uses ${KIPRJMOD})
+// 3. Libraries resolved via env vars (${KICAD10_SYMBOL_DIR}, etc.)
+// 4. Project libs override global libs with same name
+
+interface LibTableEntry {
+  name: string;
+  type: string;     // "KiCad" or "Table" (nested reference)
+  uri: string;       // File path (may contain env vars)
+  descr: string;
+}
+
+interface GlobalLibraryIndex {
+  libraries: { name: string; filePath: string; symbolNames: string[]; descr: string }[];
+  /** Map of library name → resolved file path for on-demand loading */
+  pathMap: Record<string, string>;
+}
+
+// KiCad config directory locations per platform
+const KICAD_CONFIG_DIRS = [
+  // macOS
+  path.join(process.env.HOME ?? "", "Library/Preferences/kicad"),
+  // Linux
+  path.join(process.env.HOME ?? "", ".config/kicad"),
+  // Windows
+  path.join(process.env.APPDATA ?? "", "kicad"),
+];
+
+// KiCad shared support locations (for resolving ${KICADxx_SYMBOL_DIR})
+const KICAD_SHARED_DIRS = [
+  "/Applications/KiCad/KiCad.app/Contents/SharedSupport",
+  "/usr/share/kicad",
+  "/usr/local/share/kicad",
+  "C:\\Program Files\\KiCad\\8.0\\share\\kicad",
+  "C:\\Program Files\\KiCad\\9.0\\share\\kicad",
+  "C:\\Program Files\\KiCad\\10.0\\share\\kicad",
+];
+
+/** Find the KiCad shared support directory */
+function findKicadSharedDir(): string | null {
+  for (const dir of KICAD_SHARED_DIRS) {
+    if (fs.existsSync(path.join(dir, "symbols"))) return dir;
+  }
+  return null;
+}
+
+/** Find the user's global sym-lib-table file */
+function findGlobalSymLibTable(): string | null {
+  for (const configDir of KICAD_CONFIG_DIRS) {
+    if (!fs.existsSync(configDir)) continue;
+    // Scan for versioned subdirs (e.g., 10.0, 9.0, 8.0)
+    try {
+      const versions = fs.readdirSync(configDir)
+        .filter(d => /^\d+\.\d+$/.test(d))
+        .sort((a, b) => parseFloat(b) - parseFloat(a)); // newest first
+      for (const ver of versions) {
+        const tablePath = path.join(configDir, ver, "sym-lib-table");
+        if (fs.existsSync(tablePath)) return tablePath;
+      }
+    } catch { /* skip */ }
+  }
+  return null;
+}
+
+/** Parse a sym-lib-table file into entries */
+function parseSymLibTableFile(content: string): LibTableEntry[] {
+  const entries: LibTableEntry[] = [];
+  const regex = /\(lib\s+\(name\s+"([^"]+)"\)\s*\(type\s+"([^"]+)"\)\s*\(uri\s+"([^"]+)"\)\s*\(options\s+"[^"]*"\)\s*\(descr\s+"([^"]*)"\)\)/g;
+  let match;
+  while ((match = regex.exec(content)) !== null) {
+    entries.push({
+      name: match[1]!,
+      type: match[2]!,
+      uri: match[3]!,
+      descr: match[4]!,
+    });
+  }
+  return entries;
+}
+
+/** Resolve env vars in a KiCad URI */
+function resolveKicadUri(uri: string, sharedDir: string | null, projectDir?: string): string {
+  let resolved = uri;
+  // Resolve ${KICADxx_SYMBOL_DIR} variants
+  resolved = resolved.replace(/\$\{KICAD\d+_SYMBOL_DIR\}/g, sharedDir ? path.join(sharedDir, "symbols") : "");
+  // Resolve ${KIPRJMOD}
+  if (projectDir) {
+    resolved = resolved.replace(/\$\{KIPRJMOD\}/g, projectDir);
+  }
+  return resolved;
+}
+
+/** Recursively collect all library entries from a sym-lib-table (follows Table references) */
+function collectLibEntries(tablePath: string, sharedDir: string | null): LibTableEntry[] {
+  try {
+    const content = fs.readFileSync(tablePath, "utf-8");
+    const entries = parseSymLibTableFile(content);
+    const result: LibTableEntry[] = [];
+
+    for (const entry of entries) {
+      if (entry.type === "Table") {
+        // Nested table reference — resolve and recurse
+        const nestedPath = resolveKicadUri(entry.uri, sharedDir);
+        if (fs.existsSync(nestedPath)) {
+          result.push(...collectLibEntries(nestedPath, sharedDir));
+        }
+      } else {
+        result.push(entry);
+      }
+    }
+    return result;
+  } catch {
+    return [];
+  }
+}
+
+/** Extract top-level symbol names from a .kicad_sym file without full parsing */
+function extractSymbolNames(filePath: string): string[] {
+  try {
+    const content = fs.readFileSync(filePath, "utf-8");
+    const names: string[] = [];
+    const regex = /^[\t ]{1,2}\(symbol\s+"([^"]+)"/gm;
+    let match;
+    while ((match = regex.exec(content)) !== null) {
+      const name = match[1]!;
+      // Skip sub-unit symbols (contain _N_ patterns like Foo_1_1)
+      if (!/_\d+_/.test(name)) {
+        names.push(name);
+      }
+    }
+    return names;
+  } catch {
+    return [];
+  }
+}
+
+/** Build the global library index by reading sym-lib-table chain */
+function buildGlobalLibraryIndex(): GlobalLibraryIndex | null {
+  const config = vscode.workspace.getConfiguration("sparkbench");
+  const customPath = config.get<string>("kicadLibraryPath", "");
+
+  const sharedDir = findKicadSharedDir();
+  const pathMap: Record<string, string> = {};
+  const libraries: GlobalLibraryIndex["libraries"] = [];
+
+  let entries: LibTableEntry[] = [];
+
+  if (customPath && fs.existsSync(customPath)) {
+    // Manual override: treat as a directory of .kicad_sym files
+    const files = fs.readdirSync(customPath).filter(f => f.endsWith(".kicad_sym"));
+    entries = files.map(f => ({
+      name: f.replace(".kicad_sym", ""),
+      type: "KiCad",
+      uri: path.join(customPath, f),
+      descr: "",
+    }));
+  } else {
+    // Auto-detect: read the global sym-lib-table
+    const globalTable = findGlobalSymLibTable();
+    if (!globalTable) return null;
+    entries = collectLibEntries(globalTable, sharedDir);
+  }
+
+  for (const entry of entries) {
+    if (entry.type !== "KiCad") continue;
+    const resolvedPath = resolveKicadUri(entry.uri, sharedDir);
+    if (!fs.existsSync(resolvedPath)) continue;
+
+    const symbolNames = extractSymbolNames(resolvedPath);
+    if (symbolNames.length > 0) {
+      libraries.push({
+        name: entry.name,
+        filePath: resolvedPath,
+        symbolNames,
+        descr: entry.descr,
+      });
+      pathMap[entry.name] = resolvedPath;
+    }
+  }
+
+  if (libraries.length === 0) return null;
+  return { libraries, pathMap };
+}
+
+/** Read a single library file by name using the index's path map */
+function readLibraryFile(index: GlobalLibraryIndex, libraryName: string): string | null {
+  const filePath = index.pathMap[libraryName];
+  if (!filePath) return null;
+  try {
+    return fs.readFileSync(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+let cachedGlobalIndex: GlobalLibraryIndex | null = null;
+
 // File extensions we care about for project loading
 const PROJECT_EXTENSIONS = [
   ".kicad_pcb",
@@ -20,9 +221,70 @@ const PROJECT_EXTENSIONS = [
 
 const PROJECT_EXACT_NAMES = ["sym-lib-table", "fp-lib-table"];
 
-class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
+class KicadDocument implements vscode.CustomDocument {
+  uri: vscode.Uri;
+  private _isDirty = false;
+  private _onDidDispose = new vscode.EventEmitter<void>();
+  readonly onDidDispose = this._onDidDispose.event;
+
+  private _onDidChange = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<KicadDocument>>();
+  readonly onDidChange = this._onDidChange.event;
+
+  // Pending save content from the webview
+  pendingSaveContent: string | null = null;
+  private _saveResolve: ((content: string) => void) | null = null;
+
+  constructor(uri: vscode.Uri) {
+    this.uri = uri;
+  }
+
+  get isDirty() { return this._isDirty; }
+
+  markDirty() {
+    if (!this._isDirty) {
+      this._isDirty = true;
+      this._onDidChange.fire({
+        document: this,
+        undo: () => {},
+        redo: () => {},
+      });
+    }
+  }
+
+  markClean() {
+    this._isDirty = false;
+  }
+
+  /** Called when webview responds with serialized content for save */
+  resolveSave(content: string) {
+    if (this._saveResolve) {
+      this._saveResolve(content);
+      this._saveResolve = null;
+    }
+  }
+
+  /** Wait for webview to provide content for save */
+  waitForSaveContent(): Promise<string> {
+    return new Promise((resolve) => {
+      this._saveResolve = resolve;
+    });
+  }
+
+  dispose(): void {
+    this._onDidDispose.fire();
+    this._onDidDispose.dispose();
+    this._onDidChange.dispose();
+  }
+}
+
+class KicadEditorProvider implements vscode.CustomEditorProvider<KicadDocument> {
   private readonly viewType: string;
   private readonly fileType: "pcb" | "schematic" | "project";
+  private readonly documents = new Map<string, KicadDocument>();
+  private readonly webviews = new Map<string, vscode.WebviewPanel>();
+
+  private _onDidChangeCustomDocument = new vscode.EventEmitter<vscode.CustomDocumentEditEvent<KicadDocument>>();
+  readonly onDidChangeCustomDocument = this._onDidChangeCustomDocument.event;
 
   static register(
     context: vscode.ExtensionContext,
@@ -49,8 +311,64 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
     uri: vscode.Uri,
     _openContext: vscode.CustomDocumentOpenContext,
     _token: vscode.CancellationToken,
-  ): Promise<vscode.CustomDocument> {
-    return { uri, dispose: () => {} };
+  ): Promise<KicadDocument> {
+    const doc = new KicadDocument(uri);
+    this.documents.set(uri.toString(), doc);
+    doc.onDidDispose(() => this.documents.delete(uri.toString()));
+    doc.onDidChange((e) => this._onDidChangeCustomDocument.fire(e));
+    return doc;
+  }
+
+  async saveCustomDocument(document: KicadDocument, _cancellation: vscode.CancellationToken): Promise<void> {
+    const panel = this.webviews.get(document.uri.toString());
+    if (!panel) return;
+
+    // Request content from webview
+    panel.webview.postMessage({ type: "requestSave" });
+    const content = await document.waitForSaveContent();
+
+    await vscode.workspace.fs.writeFile(
+      document.uri,
+      Buffer.from(content, "utf-8"),
+    );
+    document.markClean();
+  }
+
+  async saveCustomDocumentAs(document: KicadDocument, destination: vscode.Uri, _cancellation: vscode.CancellationToken): Promise<void> {
+    const panel = this.webviews.get(document.uri.toString());
+    if (!panel) return;
+
+    panel.webview.postMessage({ type: "requestSave" });
+    const content = await document.waitForSaveContent();
+
+    await vscode.workspace.fs.writeFile(
+      destination,
+      Buffer.from(content, "utf-8"),
+    );
+    document.markClean();
+  }
+
+  async revertCustomDocument(document: KicadDocument, _cancellation: vscode.CancellationToken): Promise<void> {
+    const panel = this.webviews.get(document.uri.toString());
+    if (!panel) return;
+
+    const updated = await vscode.workspace.fs.readFile(document.uri);
+    const fileName = document.uri.path.split("/").pop() || "unknown";
+    const updatedFiles = await this.gatherProjectFiles(document.uri);
+    panel.webview.postMessage({
+      type: "update",
+      content: Buffer.from(updated).toString("utf-8"),
+      fileName,
+      projectFiles: updatedFiles,
+    });
+    document.markClean();
+  }
+
+  async backupCustomDocument(document: KicadDocument, context: vscode.CustomDocumentBackupContext, _cancellation: vscode.CancellationToken): Promise<vscode.CustomDocumentBackup> {
+    return {
+      id: context.destination.toString(),
+      delete: () => {},
+    };
   }
 
   /**
@@ -78,22 +396,24 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
           const fileUri = vscode.Uri.joinPath(dir, name);
           const content = await vscode.workspace.fs.readFile(fileUri);
           files[name] = Buffer.from(content).toString("utf-8");
-        } catch {
-          // Skip files we can't read
+        } catch (e) {
+          console.warn(`Failed to read project file ${name}:`, e);
         }
       }
-    } catch {
-      // If we can't read the directory, just use the single file
+    } catch (e) {
+      console.warn(`Failed to read project directory:`, e);
     }
 
     return files;
   }
 
   async resolveCustomEditor(
-    document: vscode.CustomDocument,
+    document: KicadDocument,
     webviewPanel: vscode.WebviewPanel,
     _token: vscode.CancellationToken,
   ): Promise<void> {
+    this.webviews.set(document.uri.toString(), webviewPanel);
+
     webviewPanel.webview.options = {
       enableScripts: true,
       localResourceRoots: [
@@ -115,6 +435,26 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
       projectFiles,
     );
 
+    // Send global library index if enabled
+    const config = vscode.workspace.getConfiguration("sparkbench");
+    if (config.get<boolean>("useSystemKicadLibraries", true)) {
+      if (!cachedGlobalIndex) {
+        cachedGlobalIndex = buildGlobalLibraryIndex();
+      }
+      if (cachedGlobalIndex) {
+        webviewPanel.webview.postMessage({
+          type: "globalLibraryIndex",
+          index: {
+            libraries: cachedGlobalIndex.libraries.map(l => ({
+              name: l.name,
+              symbolNames: l.symbolNames,
+              descr: l.descr,
+            })),
+          },
+        });
+      }
+    }
+
     // Handle messages from webview
     webviewPanel.webview.onDidReceiveMessage(async (msg) => {
       if (msg.type === "openFile") {
@@ -126,14 +466,34 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
           await vscode.commands.executeCommand("vscode.open", fileUri);
         }
       }
+      if (msg.type === "dirty") {
+        document.markDirty();
+      }
+      if (msg.type === "saveContent") {
+        document.resolveSave(msg.content);
+      }
+      if (msg.type === "requestLibrary") {
+        // On-demand: webview requests full content of a specific library
+        if (cachedGlobalIndex) {
+          const content = readLibraryFile(cachedGlobalIndex, msg.libraryName);
+          if (content) {
+            webviewPanel.webview.postMessage({
+              type: "libraryContent",
+              libraryName: msg.libraryName,
+              content,
+            });
+          }
+        }
+      }
     });
 
-    // Watch for file changes
+    // Watch for file changes (only refresh if doc is not dirty)
     const dir = vscode.Uri.joinPath(document.uri, "..");
     const pattern = new vscode.RelativePattern(dir, "*.kicad_*");
     const watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
     const refresh = async () => {
+      if (document.isDirty) return; // Don't overwrite unsaved changes
       const updated = await vscode.workspace.fs.readFile(document.uri);
       const updatedFiles = await this.gatherProjectFiles(document.uri);
       webviewPanel.webview.postMessage({
@@ -145,7 +505,10 @@ class KicadEditorProvider implements vscode.CustomReadonlyEditorProvider {
     };
 
     watcher.onDidChange(refresh);
-    webviewPanel.onDidDispose(() => watcher.dispose());
+    webviewPanel.onDidDispose(() => {
+      watcher.dispose();
+      this.webviews.delete(document.uri.toString());
+    });
   }
 
   private getHtmlForWebview(
