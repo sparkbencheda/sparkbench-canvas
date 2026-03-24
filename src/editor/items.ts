@@ -198,6 +198,8 @@ export class SchLabel extends SchItem {
   labelType: "label" | "global_label" | "hier_label";
   shape: LabelShape;
   spin: SpinStyle;
+  /** Cached measured text width from renderer (in world units) */
+  _measuredWidth: number | null = null;
 
   constructor(
     pos: Vec2,
@@ -223,8 +225,8 @@ export class SchLabel extends SchItem {
   }
 
   getBBox(): BBox {
-    // Approximate - real size depends on text rendering
-    const textW = this.text.length * 1.0 + 2;
+    // Use cached measured width from renderer if available, else approximate
+    const textW = (this._measuredWidth != null ? this._measuredWidth + 1.0 : this.text.length * 1.0 + 2);
     const h = 2.54;
 
     // Extend bbox in the direction the text goes based on spin

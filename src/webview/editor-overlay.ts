@@ -6,6 +6,7 @@ import { EditorRenderer, type ViewTransform } from "./editor-renderer";
 import type { KicadSch } from "../../vendor-kicanvas/src/kicad";
 import { importKicadSch } from "./sch-import";
 import { SymbolLibrary } from "./symbol-library";
+import { SchItem, SchSymbol, SchLabel, SchLine, SchJunction, SchNoConnect } from "../editor/items";
 
 export class EditorOverlay {
   readonly doc: SchematicDoc;
@@ -48,6 +49,7 @@ export class EditorOverlay {
       requestLabelText: (current) => this.promptLabel(current),
       showStatus: (msg) => this.showStatus(msg),
       setCursor: (cursor) => { this.canvas.style.cursor = cursor; },
+      editProperties: (item) => this.editProperties(item),
     });
     this.tools.symLibrary = this.symLibrary;
 
@@ -214,6 +216,8 @@ export class EditorOverlay {
     this.renderer.clear();
     this.renderer.drawGrid(this.tools.grid.gridSize);
     this.renderer.drawDoc(this.doc, this.tools.selection);
+    const marquee = this.tools.marqueeRect;
+    if (marquee) this.renderer.drawSelectionRect(marquee);
     this.renderer.drawCrosshair(this.cursorPos);
   }
 
@@ -380,6 +384,115 @@ export class EditorOverlay {
 
       setTimeout(() => input.focus(), 0);
     });
+  }
+
+  private editProperties(item: SchItem) {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;display:flex;align-items:center;justify-content:center;";
+
+    const modal = document.createElement("div");
+    modal.style.cssText = "background:#252526;border:1px solid #3c3c3c;border-radius:6px;width:360px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
+
+    const title = document.createElement("div");
+    title.style.cssText = "font-size:13px;color:#e0e0e0;font-weight:600;margin-bottom:12px;";
+    title.textContent = `Properties: ${item.itemType}`;
+    modal.appendChild(title);
+
+    const inputStyle = "width:100%;padding:5px 8px;background:#1e1e1e;border:1px solid #3c3c3c;border-radius:4px;color:#ccc;font-size:12px;outline:none;box-sizing:border-box;";
+    const labelStyle = "font-size:11px;color:#858585;margin-bottom:2px;margin-top:8px;";
+    const inputs: { key: string; el: HTMLInputElement }[] = [];
+
+    const addField = (key: string, label: string, value: string, readonly = false) => {
+      const lbl = document.createElement("div");
+      lbl.style.cssText = labelStyle;
+      lbl.textContent = label;
+      modal.appendChild(lbl);
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.value = value;
+      inp.readOnly = readonly;
+      inp.style.cssText = inputStyle;
+      if (readonly) inp.style.opacity = "0.5";
+      modal.appendChild(inp);
+      if (!readonly) inputs.push({ key, el: inp });
+    };
+
+    if (item instanceof SchSymbol) {
+      addField("reference", "Reference", item.reference);
+      addField("value", "Value", item.value);
+      const fp = item.fields.find(f => f.name === "Footprint");
+      if (fp) addField("footprint", "Footprint", fp.text);
+      addField("libId", "Library", item.libId, true);
+      addField("pos", "Position", `${item.pos.x.toFixed(2)}, ${item.pos.y.toFixed(2)}`, true);
+    } else if (item instanceof SchLabel) {
+      addField("text", "Text", item.text);
+      addField("labelType", "Type", item.labelType, true);
+      addField("pos", "Position", `${item.pos.x.toFixed(2)}, ${item.pos.y.toFixed(2)}`, true);
+    } else if (item instanceof SchLine) {
+      addField("layer", "Layer", item.layer, true);
+      addField("start", "Start", `${item.start.x.toFixed(2)}, ${item.start.y.toFixed(2)}`, true);
+      addField("end", "End", `${item.end.x.toFixed(2)}, ${item.end.y.toFixed(2)}`, true);
+    } else {
+      addField("type", "Type", item.itemType, true);
+    }
+
+    // Buttons
+    const btnRow = document.createElement("div");
+    btnRow.style.cssText = "display:flex;gap:8px;justify-content:flex-end;margin-top:16px;";
+    const btnStyle = "padding:5px 16px;border:1px solid #3c3c3c;border-radius:4px;font-size:12px;cursor:pointer;";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.style.cssText = btnStyle + "background:#333;color:#ccc;";
+
+    const okBtn = document.createElement("button");
+    okBtn.textContent = "OK";
+    okBtn.style.cssText = btnStyle + "background:#0e639c;color:#fff;border-color:#0e639c;";
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(okBtn);
+    modal.appendChild(btnRow);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const cleanup = () => document.body.removeChild(overlay);
+
+    const apply = () => {
+      if (inputs.length === 0) { cleanup(); return; }
+
+      this.doc.commitModify(item);
+
+      for (const { key, el } of inputs) {
+        const val = el.value.trim();
+        if (item instanceof SchSymbol) {
+          if (key === "reference") item.reference = val;
+          else if (key === "value") item.value = val;
+          else if (key === "footprint") {
+            const fp = item.fields.find(f => f.name === "Footprint");
+            if (fp) fp.text = val;
+          }
+        } else if (item instanceof SchLabel) {
+          if (key === "text") item.text = val;
+        }
+      }
+
+      this.doc.commitPush("Edit properties");
+      this.requestRedraw();
+      cleanup();
+    };
+
+    cancelBtn.addEventListener("click", cleanup);
+    okBtn.addEventListener("click", apply);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) cleanup(); });
+
+    // Keyboard handling on modal
+    modal.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); cleanup(); }
+      if (e.key === "Enter") { e.stopPropagation(); apply(); }
+    });
+
+    // Focus first editable input
+    setTimeout(() => { if (inputs[0]) { inputs[0].el.focus(); inputs[0].el.select(); } }, 0);
   }
 
   private showStatus(msg: string) {

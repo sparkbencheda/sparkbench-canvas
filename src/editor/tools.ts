@@ -1,6 +1,6 @@
 // Tool system - thin dispatcher that delegates to individual tool classes
 
-import type { ISymbolLibrary } from "./types";
+import type { ISymbolLibrary, BBox } from "./types";
 import { SchematicDoc } from "./schematic-doc";
 import { GridHelper } from "./grid";
 import { ChangeType } from "./undo";
@@ -62,6 +62,12 @@ export class ToolManager {
     ]);
 
     this.currentTool = this.tools.get(ToolType.SELECT)!;
+  }
+
+  /** Returns the current marquee selection rect, or null */
+  get marqueeRect(): BBox | null {
+    const sel = this.tools.get(ToolType.SELECT) as SelectTool | undefined;
+    return sel?.marqueeRect ?? null;
   }
 
   // ==================== Tool Switching ====================

@@ -2,7 +2,7 @@ import { BaseTool } from "./base-tool";
 import { ToolType, type ToolEvent } from "../tool-types";
 import type { SchItem } from "../items";
 import { vec2Sub } from "../types";
-import type { Vec2 } from "../types";
+import type { Vec2, BBox } from "../types";
 
 export class SelectTool extends BaseTool {
   readonly type = ToolType.SELECT;
@@ -10,13 +10,20 @@ export class SelectTool extends BaseTool {
   private moveItems: SchItem[] = [];
   private moveOrigin: Vec2 = { x: 0, y: 0 };
   private isDragging = false;
+  private isMarquee = false;
   private dragStartPos: Vec2 = { x: 0, y: 0 };
   private mouseDown = false;
+  private hitOnDown = false;
   private dragThreshold = 0.5;
+
+  /** Current marquee rectangle in world coords, or null if not active */
+  marqueeRect: BBox | null = null;
 
   onDeactivate(): void {
     this.moveItems = [];
     this.isDragging = false;
+    this.isMarquee = false;
+    this.marqueeRect = null;
     this.mouseDown = false;
   }
 
@@ -24,10 +31,13 @@ export class SelectTool extends BaseTool {
     if (evt.type === "mousedown") {
       this.mouseDown = true;
       this.isDragging = false;
+      this.isMarquee = false;
+      this.marqueeRect = null;
       this.dragStartPos = { ...evt.pos };
 
       const hits = this.ctx.doc.hitTest(evt.pos, 2);
       const topHit = this.pickBest(hits);
+      this.hitOnDown = !!topHit;
 
       if (topHit) {
         if (evt.shift) {
@@ -51,7 +61,8 @@ export class SelectTool extends BaseTool {
       const dy = evt.pos.y - this.dragStartPos.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
-      if (!this.isDragging && dist > this.dragThreshold && this.ctx.selection.size > 0) {
+      // Start move drag (when items are selected and we clicked on one)
+      if (!this.isDragging && !this.isMarquee && dist > this.dragThreshold && this.hitOnDown && this.ctx.selection.size > 0) {
         this.isDragging = true;
         this.moveItems = [];
         for (const id of this.ctx.selection) {
@@ -66,12 +77,27 @@ export class SelectTool extends BaseTool {
         this.ctx.callbacks.showStatus("Dragging...");
       }
 
+      // Start marquee drag (when we clicked on empty space)
+      if (!this.isDragging && !this.isMarquee && dist > this.dragThreshold && !this.hitOnDown) {
+        this.isMarquee = true;
+        this.ctx.callbacks.setCursor("crosshair");
+      }
+
       if (this.isDragging && this.moveItems.length > 0) {
         const delta = vec2Sub(evt.pos, this.moveOrigin);
         for (const item of this.moveItems) {
           item.move(delta);
         }
         this.moveOrigin = { ...evt.pos };
+        this.ctx.callbacks.requestRedraw();
+      }
+
+      if (this.isMarquee) {
+        const x = Math.min(this.dragStartPos.x, evt.pos.x);
+        const y = Math.min(this.dragStartPos.y, evt.pos.y);
+        const w = Math.abs(evt.pos.x - this.dragStartPos.x);
+        const h = Math.abs(evt.pos.y - this.dragStartPos.y);
+        this.marqueeRect = { x, y, width: w, height: h };
         this.ctx.callbacks.requestRedraw();
       }
     }
@@ -84,8 +110,24 @@ export class SelectTool extends BaseTool {
         this.ctx.callbacks.setCursor("default");
         this.ctx.callbacks.showStatus("Moved");
       }
+
+      if (this.isMarquee && this.marqueeRect) {
+        const items = this.ctx.doc.itemsInArea(this.marqueeRect);
+        if (!evt.shift) this.ctx.selection.clear();
+        for (const item of items) {
+          this.ctx.selection.add(item.id);
+        }
+        this.isMarquee = false;
+        this.marqueeRect = null;
+        this.ctx.callbacks.setCursor("default");
+        const count = this.ctx.selection.size;
+        if (count > 0) this.ctx.callbacks.showStatus(`Selected ${count} item${count > 1 ? "s" : ""}`);
+      }
+
       this.mouseDown = false;
       this.isDragging = false;
+      this.isMarquee = false;
+      this.marqueeRect = null;
       this.ctx.callbacks.requestRedraw();
     }
 
@@ -93,7 +135,7 @@ export class SelectTool extends BaseTool {
       const hits = this.ctx.doc.hitTest(evt.pos, 2);
       const topHit = this.pickBest(hits);
       if (topHit) {
-        this.ctx.callbacks.showStatus(`Properties: ${topHit.itemType} ${topHit.id}`);
+        this.ctx.callbacks.editProperties(topHit);
       }
     }
   }

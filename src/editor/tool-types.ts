@@ -1,6 +1,7 @@
 // Shared types for the tool system
 
 import type { Vec2 } from "./types";
+import type { SchItem } from "./items";
 
 export type ToolEventType =
   | "click"
@@ -39,4 +40,5 @@ export type EditorCallback = {
   requestLabelText: (current?: string) => Promise<string | null>;
   showStatus: (msg: string) => void;
   setCursor: (cursor: string) => void;
+  editProperties: (item: SchItem) => void;
 };

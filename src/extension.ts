@@ -3,10 +3,36 @@ import * as fs from "fs";
 import * as path from "path";
 
 export function activate(context: vscode.ExtensionContext) {
+  const schProvider = KicadEditorProvider.register(context, "sparkbench.kicadSch", "schematic");
   context.subscriptions.push(
     KicadEditorProvider.register(context, "sparkbench.kicadPcb", "pcb"),
-    KicadEditorProvider.register(context, "sparkbench.kicadSch", "schematic"),
+    schProvider,
     KicadEditorProvider.register(context, "sparkbench.kicadPro", "project"),
+  );
+
+  // Editor tool commands — post messages to the active schematic webview
+  const toolCommands: [string, string][] = [
+    ["sparkbench.editor.placeWire", "wire"],
+    ["sparkbench.editor.placeBus", "bus"],
+    ["sparkbench.editor.placeSymbol", "symbol"],
+    ["sparkbench.editor.placeLabel", "label"],
+    ["sparkbench.editor.placeGlobalLabel", "global_label"],
+    ["sparkbench.editor.placeJunction", "junction"],
+    ["sparkbench.editor.placeNoConnect", "no_connect"],
+  ];
+
+  for (const [commandId, tool] of toolCommands) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(commandId, () => {
+        KicadEditorProvider.postToActiveWebview({ type: "setTool", tool });
+      }),
+    );
+  }
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("sparkbench.editor.toggleEditMode", () => {
+      KicadEditorProvider.postToActiveWebview({ type: "toggleEditMode" });
+    }),
   );
 }
 
@@ -278,6 +304,14 @@ class KicadDocument implements vscode.CustomDocument {
 }
 
 class KicadEditorProvider implements vscode.CustomEditorProvider<KicadDocument> {
+  private static activePanel: vscode.WebviewPanel | null = null;
+
+  static postToActiveWebview(message: unknown) {
+    if (KicadEditorProvider.activePanel) {
+      KicadEditorProvider.activePanel.webview.postMessage(message);
+    }
+  }
+
   private readonly viewType: string;
   private readonly fileType: "pcb" | "schematic" | "project";
   private readonly documents = new Map<string, KicadDocument>();
@@ -413,6 +447,12 @@ class KicadEditorProvider implements vscode.CustomEditorProvider<KicadDocument> 
     _token: vscode.CancellationToken,
   ): Promise<void> {
     this.webviews.set(document.uri.toString(), webviewPanel);
+
+    // Track active panel for command palette
+    KicadEditorProvider.activePanel = webviewPanel;
+    webviewPanel.onDidChangeViewState(() => {
+      if (webviewPanel.active) KicadEditorProvider.activePanel = webviewPanel;
+    });
 
     webviewPanel.webview.options = {
       enableScripts: true,

@@ -231,7 +231,7 @@ function buildSymbolsPanel(viewer: SchematicViewer, sch: KicadSch) {
   const panel = panels.get("symbols");
   if (!panel) return;
 
-  const symbols = sch.symbols ?? [];
+  const symbols = [...(sch.symbols?.values() ?? [])];
   let html = '<div class="panel-section"><div class="panel-section-title">Symbols (' + symbols.length + ')</div>';
   for (const sym of symbols) {
     const ref = sym.reference ?? "?";
@@ -244,11 +244,8 @@ function buildSymbolsPanel(viewer: SchematicViewer, sch: KicadSch) {
   panel.querySelectorAll(".list-item").forEach((el) => {
     el.addEventListener("click", () => {
       const uuid = (el as HTMLElement).dataset.symUuid!;
-      const sym = symbols.find((s: any) => s.uuid === uuid);
-      if (sym) {
-        viewer.select(sym.bbox);
-        viewer.zoom_to_selection();
-      }
+      viewer.select(uuid);
+      viewer.zoom_to_selection();
       panel.querySelectorAll(".list-item").forEach((i) => i.classList.remove("selected"));
       el.classList.add("selected");
     });
@@ -320,7 +317,7 @@ function buildInfoPanel(doc: KicadPCB | KicadSch, project: Project | null) {
     html += info("Layers", String(doc.layers.length));
     if (doc.general) html += info("Thickness", doc.general.thickness + "mm");
   } else {
-    html += info("Symbols", String(doc.symbols?.length ?? 0));
+    html += info("Symbols", String(doc.symbols?.size ?? 0));
     html += info("Sheets", String(doc.sheets?.length ?? 0));
   }
 
@@ -744,6 +741,14 @@ window.addEventListener("message", (event) => {
     if (editorOverlay) {
       editorOverlay.symLibrary.loadLibraryContent(msg.libraryName, msg.content);
     }
+  }
+  if (msg.type === "setTool") {
+    // Ensure edit mode is active, then switch tool
+    if (!editModeActive) toggleEditMode();
+    if (editorOverlay) editorOverlay.setTool(msg.tool);
+  }
+  if (msg.type === "toggleEditMode") {
+    toggleEditMode();
   }
 });
 

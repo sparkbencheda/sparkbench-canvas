@@ -51,6 +51,46 @@
       {
         "command": "sparkbench.openKicadViewer",
         "title": "SparkBench: Open KiCad Viewer"
+      },
+      {
+        "command": "sparkbench.editor.placeWire",
+        "title": "SparkBench: Place Wire",
+        "enablement": "activeCustomEditorId == 'sparkbench.kicadSch'"
+      },
+      {
+        "command": "sparkbench.editor.placeBus",
+        "title": "SparkBench: Place Bus",
+        "enablement": "activeCustomEditorId == 'sparkbench.kicadSch'"
+      },
+      {
+        "command": "sparkbench.editor.placeSymbol",
+        "title": "SparkBench: Place Symbol",
+        "enablement": "activeCustomEditorId == 'sparkbench.kicadSch'"
+      },
+      {
+        "command": "sparkbench.editor.placeLabel",
+        "title": "SparkBench: Place Label",
+        "enablement": "activeCustomEditorId == 'sparkbench.kicadSch'"
+      },
+      {
+        "command": "sparkbench.editor.placeGlobalLabel",
+        "title": "SparkBench: Place Global Label",
+        "enablement": "activeCustomEditorId == 'sparkbench.kicadSch'"
+      },
+      {
+        "command": "sparkbench.editor.placeJunction",
+        "title": "SparkBench: Place Junction",
+        "enablement": "activeCustomEditorId == 'sparkbench.kicadSch'"
+      },
+      {
+        "command": "sparkbench.editor.placeNoConnect",
+        "title": "SparkBench: Place No Connect",
+        "enablement": "activeCustomEditorId == 'sparkbench.kicadSch'"
+      },
+      {
+        "command": "sparkbench.editor.toggleEditMode",
+        "title": "SparkBench: Toggle Edit Mode",
+        "enablement": "activeCustomEditorId == 'sparkbench.kicadSch'"
       }
     ],
     "configuration": {

@@ -197,19 +197,55 @@ export class EditorRenderer {
     ctx.textAlign = "left";
     ctx.fillText(label.text, 0.5, 0);
 
-    // Draw outline for global labels
+    // Cache measured text width for accurate bounding boxes
+    label._measuredWidth = ctx.measureText(label.text).width + 0.5;
+
+    // Draw outline for global labels - shape varies by type
     if (label.labelType === "global_label") {
       const w = ctx.measureText(label.text).width + 1.5;
       const h = 1.8;
       ctx.strokeStyle = color;
       ctx.lineWidth = 0.15;
       ctx.beginPath();
-      ctx.moveTo(0, -h / 2);
-      ctx.lineTo(w - 0.5, -h / 2);
-      ctx.lineTo(w, 0);
-      ctx.lineTo(w - 0.5, h / 2);
-      ctx.lineTo(0, h / 2);
-      ctx.closePath();
+
+      switch (label.shape) {
+        case 0: // INPUT: arrow pointing right >
+          ctx.moveTo(0, -h / 2);
+          ctx.lineTo(w - 0.5, -h / 2);
+          ctx.lineTo(w, 0);
+          ctx.lineTo(w - 0.5, h / 2);
+          ctx.lineTo(0, h / 2);
+          ctx.closePath();
+          break;
+        case 1: // OUTPUT: arrow pointing left <
+          ctx.moveTo(0.5, -h / 2);
+          ctx.lineTo(w, -h / 2);
+          ctx.lineTo(w, h / 2);
+          ctx.lineTo(0.5, h / 2);
+          ctx.lineTo(0, 0);
+          ctx.closePath();
+          break;
+        case 2: // BIDI: diamond <>
+          ctx.moveTo(0.5, -h / 2);
+          ctx.lineTo(w - 0.5, -h / 2);
+          ctx.lineTo(w, 0);
+          ctx.lineTo(w - 0.5, h / 2);
+          ctx.lineTo(0.5, h / 2);
+          ctx.lineTo(0, 0);
+          ctx.closePath();
+          break;
+        case 3: // TRISTATE: inverted triangle (flag shape)
+          ctx.moveTo(0, -h / 2);
+          ctx.lineTo(w, -h / 2);
+          ctx.lineTo(w, h / 2);
+          ctx.lineTo(0, h / 2);
+          ctx.lineTo(0.5, 0);
+          ctx.closePath();
+          break;
+        default: // UNSPECIFIED / PASSIVE: rectangle
+          ctx.rect(0, -h / 2, w, h);
+          break;
+      }
       ctx.stroke();
     }
 
@@ -494,6 +530,26 @@ export class EditorRenderer {
     ctx.textBaseline = "top";
     ctx.fillStyle = COLORS.label;
     ctx.fillText(sheet.fileName, sheet.pos.x, sheet.pos.y + sheet.size.y + 0.5);
+  }
+
+  drawSelectionRect(bbox: BBox) {
+    const ctx = this.ctx;
+    const dpr = this.dpr;
+    const tl = this.worldToScreen(bbox.x, bbox.y);
+    const br = this.worldToScreen(bbox.x + bbox.width, bbox.y + bbox.height);
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    // Semi-transparent fill
+    ctx.fillStyle = "rgba(0, 170, 255, 0.08)";
+    ctx.fillRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+
+    // Dashed border
+    ctx.strokeStyle = "#00aaff";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+    ctx.setLineDash([]);
   }
 
   drawCrosshair(pos: Vec2) {
