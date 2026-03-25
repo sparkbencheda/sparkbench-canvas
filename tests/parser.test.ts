@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parse_expr, P, T } from "../vendor-kicanvas/src/kicad/parser";
+import { parse_expr, P, T } from "../src/kicanvas/kicad/parser";
 
 describe("parse_expr", () => {
   it("parses a start + positional", () => {

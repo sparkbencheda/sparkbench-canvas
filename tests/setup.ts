@@ -1,4 +1,4 @@
-// Polyfill window for vendor-kicanvas Logger which uses window.console
+// Polyfill window for KiCanvas logger which uses window.console
 import { vi } from "vitest";
 
 if (typeof globalThis.window === "undefined") {

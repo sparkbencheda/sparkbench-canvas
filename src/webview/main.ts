@@ -2,7 +2,6 @@ import { KicadPCB, KicadSch } from "../kicanvas/kicad";
 import { Footprint } from "../kicanvas/kicad/board";
 import { SchematicSymbol } from "../kicanvas/kicad/schematic";
 import { BoardViewer } from "../kicanvas/viewers/board/viewer";
-import { SchematicViewer } from "../kicanvas/viewers/schematic/viewer";
 import { EditableSchematicViewer } from "../kicanvas/viewers/schematic/editable-viewer";
 import { Project, ProjectPage } from "../kicanvas/kicanvas/project";
 import { LocalFileSystem } from "../kicanvas/kicanvas/services/vfs";
@@ -36,7 +35,7 @@ const sidebarContent = document.getElementById("sidebar-content")!;
 const pageSelector = document.getElementById("page-selector") as HTMLSelectElement;
 const fileType = window.__KICAD_FILE_TYPE__;
 
-let currentViewer: BoardViewer | SchematicViewer | null = null;
+let currentViewer: BoardViewer | EditableSchematicViewer | null = null;
 let currentProject: Project | null = null;
 let currentSch: KicadSch | null = null;
 let editorOverlay: EditorOverlay | null = null;
@@ -228,7 +227,7 @@ function buildNetPanel(viewer: BoardViewer, board: KicadPCB) {
   });
 }
 
-function buildSymbolsPanel(viewer: SchematicViewer, sch: KicadSch) {
+function buildSymbolsPanel(viewer: EditableSchematicViewer, sch: KicadSch) {
   const panel = panels.get("symbols");
   if (!panel) return;
 
@@ -375,7 +374,7 @@ function setupPageSelector(project: Project, activePage: ProjectPage) {
 
 // ==================== Viewer Lifecycle ====================
 
-function wireViewerEvents(viewer: BoardViewer | SchematicViewer) {
+function wireViewerEvents(viewer: BoardViewer | EditableSchematicViewer) {
   viewer.addEventListener("kicanvas:mousemove", () => {
     const pos = viewer.mouse_position;
     mousePosEl.textContent = `X: ${pos.x.toFixed(2)}  Y: ${pos.y.toFixed(2)} mm`;
@@ -386,6 +385,28 @@ function wireViewerEvents(viewer: BoardViewer | SchematicViewer) {
     btnZoomSel.disabled = !viewer.selected;
     updateProperties(viewer.selected);
   });
+}
+
+function wireSchematicEditEvents(viewer: EditableSchematicViewer) {
+  viewer.onEditEvent = (evt) => {
+    if (evt.type === "click" && !evt.ctrl) {
+      const topHit = evt.hits[0];
+      if (topHit) {
+        if (evt.shift) {
+          viewer.toggleSelection(topHit.item);
+        } else {
+          viewer.selectItem(topHit.item);
+        }
+      } else if (!evt.shift) {
+        viewer.clearSelection();
+      }
+    }
+
+    if (evt.type === "motion") {
+      const topHit = evt.hits[0];
+      viewer.setHovered(topHit?.item ?? null);
+    }
+  };
 }
 
 async function showPage(page: ProjectPage) {
@@ -455,26 +476,7 @@ async function showPage(page: ProjectPage) {
       await viewer.setup();
       await viewer.load(doc);
 
-      // Wire up editing events — selection on click, hover on motion
-      viewer.onEditEvent = (evt) => {
-        if (evt.type === "click" && !evt.ctrl) {
-          const topHit = evt.hits[0];
-          if (topHit) {
-            if (evt.shift) {
-              viewer.toggleSelection(topHit.item);
-            } else {
-              viewer.selectItem(topHit.item);
-            }
-          } else if (!evt.shift) {
-            viewer.clearSelection();
-          }
-        }
-        if (evt.type === "motion") {
-          const topHit = evt.hits[0];
-          viewer.setHovered(topHit?.item ?? null);
-        }
-      };
-
+      wireSchematicEditEvents(viewer);
       wireViewerEvents(viewer);
       buildSymbolsPanel(viewer, doc);
       buildInfoPanel(doc, currentProject);
@@ -599,10 +601,11 @@ async function loadProject(projectFiles: Record<string, string>, primaryFileName
 
       const sch = new KicadSch(name, content);
       currentSch = sch;
-      const viewer = new SchematicViewer(canvas, true, theme.schematic);
+      const viewer = new EditableSchematicViewer(canvas, true, theme.schematic);
       currentViewer = viewer;
       await viewer.setup();
       await viewer.load(sch);
+      wireSchematicEditEvents(viewer);
       wireViewerEvents(viewer);
       buildSymbolsPanel(viewer, sch);
       buildInfoPanel(sch, null);
