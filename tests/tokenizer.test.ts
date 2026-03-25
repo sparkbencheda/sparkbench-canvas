@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { tokenize, Token, listify } from "../vendor-kicanvas/src/kicad/tokenizer";
+import { tokenize, Token, listify } from "../src/kicanvas/kicad/tokenizer";
 
 function tokens(input: string) {
   return Array.from(tokenize(input));

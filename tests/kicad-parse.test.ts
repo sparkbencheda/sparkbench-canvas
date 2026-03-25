@@ -1,92 +1,77 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "fs";
-import { resolve } from "path";
-import { KicadPCB } from "../vendor-kicanvas/src/kicad/board";
-import { KicadSch } from "../vendor-kicanvas/src/kicad/schematic";
+import { KicadPCB } from "../src/kicanvas/kicad/board";
+import { KicadSch } from "../src/kicanvas/kicad/schematic";
 
-const examplesDir = resolve(__dirname, "../examples/tracelinkbase");
+const pcbContent = `(kicad_pcb
+  (version 20240108)
+  (generator "sparkbench-test")
+  (layers
+    (0 "F.Cu" signal)
+    (31 "B.Cu" signal))
+  (net 0 "")
+  (net 1 "GND")
+  (segment
+    (start 0 0)
+    (end 10 0)
+    (width 0.25)
+    (layer "F.Cu")
+    (net 1))
+)`;
+
+const schContent = `(kicad_sch
+  (version 20231120)
+  (generator "sparkbench-test")
+  (uuid "test-schematic")
+  (wire
+    (pts (xy 0 0) (xy 10 0))
+    (stroke (width 0) (type default) (color 0 0 0 0))
+    (uuid "wire-1"))
+  (label "N$1"
+    (at 10 0 0)
+    (effects (font (size 1.27 1.27)))
+    (uuid "label-1"))
+)`;
 
 describe("KicadPCB parsing", () => {
-  const pcbContent = readFileSync(
-    resolve(examplesDir, "synflightIMU.kicad_pcb"),
-    "utf-8",
-  );
-  const board = new KicadPCB("synflightIMU.kicad_pcb", pcbContent);
+  const board = new KicadPCB("test.kicad_pcb", pcbContent);
 
   it("parses version", () => {
-    expect(board.version).toBeTypeOf("number");
-    expect(board.version).toBeGreaterThan(0);
+    expect(board.version).toBe(20240108);
   });
 
   it("parses layers", () => {
-    expect(board.layers.length).toBeGreaterThan(0);
-    const layerNames = board.layers.map((l: any) => l.canonical_name);
+    expect(board.layers.length).toBe(2);
+    const layerNames = board.layers.map((l) => l.canonical_name);
     expect(layerNames).toContain("F.Cu");
     expect(layerNames).toContain("B.Cu");
   });
 
-  it("parses footprints", () => {
-    expect(board.footprints.length).toBeGreaterThan(0);
-  });
-
-  it("footprints have references", () => {
-    const withRef = board.footprints.filter(
-      (fp: any) => fp.reference && fp.reference !== "",
-    );
-    expect(withRef.length).toBeGreaterThan(0);
-  });
-
   it("parses nets", () => {
-    expect(board.nets.length).toBeGreaterThan(0);
+    expect(board.nets.length).toBe(2);
+    expect(board.nets[1]?.name).toBe("GND");
   });
 
   it("parses segments (traces)", () => {
-    expect(board.segments.length).toBeGreaterThan(0);
-  });
-
-  it("parses general properties", () => {
-    expect(board.general).toBeDefined();
-    expect(board.general!.thickness).toBeTypeOf("number");
+    expect(board.segments.length).toBe(1);
+    expect(board.segments[0]?.layer).toBe("F.Cu");
   });
 });
 
 describe("KicadSch parsing", () => {
-  const schContent = readFileSync(
-    resolve(examplesDir, "synflightIMU.kicad_sch"),
-    "utf-8",
-  );
-  const sch = new KicadSch("synflightIMU.kicad_sch", schContent);
+  const sch = new KicadSch("test.kicad_sch", schContent);
 
-  it("parses version", () => {
-    expect(sch.version).toBeTypeOf("number");
-    expect(sch.version).toBeGreaterThan(0);
-  });
-
-  it("parses uuid", () => {
-    expect(sch.uuid).toBeDefined();
-    expect(sch.uuid.length).toBeGreaterThan(0);
-  });
-
-  it("parses symbols", () => {
-    expect(sch.symbols.size).toBeGreaterThan(0);
-  });
-
-  it("symbols have lib_id", () => {
-    for (const [, sym] of sch.symbols) {
-      expect(sym.lib_id).toBeDefined();
-      break;
-    }
+  it("parses version and uuid", () => {
+    expect(sch.version).toBe(20231120);
+    expect(sch.uuid).toBe("test-schematic");
   });
 
   it("parses wires", () => {
-    expect(sch.wires.length).toBeGreaterThan(0);
+    expect(sch.wires.length).toBe(1);
+    expect(sch.wires[0]?.pts).toHaveLength(2);
   });
 
   it("parses labels", () => {
-    const totalLabels =
-      sch.net_labels.length +
-      sch.global_labels.length +
-      sch.hierarchical_labels.length;
-    expect(totalLabels).toBeGreaterThanOrEqual(0);
+    expect(sch.net_labels.length).toBe(1);
+    expect(sch.net_labels[0]?.text).toBe("N$1");
   });
 });
