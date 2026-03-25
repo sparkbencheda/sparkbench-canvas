@@ -5,4 +5,4 @@ examples/
 test-results/
 tests/e2e/dist/
 kicad-ref/
-vendor/kicad10rc2/
+vendor/
