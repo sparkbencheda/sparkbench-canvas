@@ -3,6 +3,7 @@ import { Footprint } from "../../vendor-kicanvas/src/kicad/board";
 import { SchematicSymbol } from "../../vendor-kicanvas/src/kicad/schematic";
 import { BoardViewer } from "../../vendor-kicanvas/src/viewers/board/viewer";
 import { SchematicViewer } from "../../vendor-kicanvas/src/viewers/schematic/viewer";
+import { EditableSchematicViewer } from "../../vendor-kicanvas/src/viewers/schematic/editable-viewer";
 import { Project, ProjectPage } from "../../vendor-kicanvas/src/kicanvas/project";
 import { LocalFileSystem } from "../../vendor-kicanvas/src/kicanvas/services/vfs";
 import themes from "../../vendor-kicanvas/src/kicanvas/themes/index";
@@ -449,10 +450,30 @@ async function showPage(page: ProjectPage) {
       const propsPanel = panels.get("properties")!;
       propsPanel.innerHTML = `<div class="panel-section"><div class="panel-section-title">Selection</div><div id="props-content"><span style="color:var(--fg-dim)">Click an item to see its properties</span></div></div>`;
 
-      const viewer = new SchematicViewer(canvas, true, theme.schematic);
+      const viewer = new EditableSchematicViewer(canvas, true, theme.schematic);
       currentViewer = viewer;
       await viewer.setup();
       await viewer.load(doc);
+
+      // Wire up editing events — selection on click, hover on motion
+      viewer.onEditEvent = (evt) => {
+        if (evt.type === "click" && !evt.ctrl) {
+          const topHit = evt.hits[0];
+          if (topHit) {
+            if (evt.shift) {
+              viewer.toggleSelection(topHit.item);
+            } else {
+              viewer.selectItem(topHit.item);
+            }
+          } else if (!evt.shift) {
+            viewer.clearSelection();
+          }
+        }
+        if (evt.type === "motion") {
+          const topHit = evt.hits[0];
+          viewer.setHovered(topHit?.item ?? null);
+        }
+      };
 
       wireViewerEvents(viewer);
       buildSymbolsPanel(viewer, doc);
