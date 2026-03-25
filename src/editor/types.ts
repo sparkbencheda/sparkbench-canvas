@@ -95,8 +95,8 @@ export interface StrokeParams {
 }
 
 // Symbol library interface (avoids circular dependency with webview/)
-// Uses LibSymbol from vendor-kicanvas
-import type { LibSymbol } from "../../vendor-kicanvas/src/kicad/schematic";
+// Uses LibSymbol from kicanvas
+import type { LibSymbol } from "../kicanvas/kicad/schematic";
 export type { LibSymbol };
 
 export interface ISymbolLibrary {

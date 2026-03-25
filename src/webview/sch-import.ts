@@ -1,6 +1,6 @@
 // Imports kicanvas KicadSch data into the editor's SchematicDoc
 
-import type { KicadSch } from "../../vendor-kicanvas/src/kicad";
+import type { KicadSch } from "../kicanvas/kicad";
 import type {
   Wire,
   Bus,
@@ -11,7 +11,7 @@ import type {
   HierarchicalLabel,
   SchematicSymbol,
   SchematicSheet,
-} from "../../vendor-kicanvas/src/kicad/schematic";
+} from "../kicanvas/kicad/schematic";
 import { SchematicDoc } from "../editor/schematic-doc";
 import {
   SchLine,

@@ -3,7 +3,7 @@
 import { SchematicDoc } from "../editor/schematic-doc";
 import { ToolManager, ToolType, type ToolEvent } from "../editor/tools";
 import { EditorRenderer, type ViewTransform } from "./editor-renderer";
-import type { KicadSch } from "../../vendor-kicanvas/src/kicad";
+import type { KicadSch } from "../kicanvas/kicad";
 import { importKicadSch } from "./sch-import";
 import { SymbolLibrary } from "./symbol-library";
 import { SchItem, SchSymbol, SchLabel, SchLine, SchJunction, SchNoConnect } from "../editor/items";

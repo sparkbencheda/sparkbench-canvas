@@ -1,11 +1,11 @@
 // Symbol library index - aggregates symbols from embedded lib_symbols and standalone .kicad_sym files
 
-import type { KicadSch } from "../../vendor-kicanvas/src/kicad";
+import type { KicadSch } from "../kicanvas/kicad";
 import {
   LibSymbol,
-} from "../../vendor-kicanvas/src/kicad/schematic";
-import { listify } from "../../vendor-kicanvas/src/kicad/tokenizer";
-import { parse_expr, P, T } from "../../vendor-kicanvas/src/kicad/parser";
+} from "../kicanvas/kicad/schematic";
+import { listify } from "../kicanvas/kicad/tokenizer";
+import { parse_expr, P, T } from "../kicanvas/kicad/parser";
 
 export interface SymbolEntry {
   fullId: string;       // "LibName:SymbolName"
