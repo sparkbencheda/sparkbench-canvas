@@ -1,6 +1,7 @@
 import { BaseTool } from "./base-tool";
 import { ToolType, type ToolEvent } from "../tool-types";
-import { SchJunction } from "../items";
+import { KicadSchDoc } from "../kicad-sch-doc";
+import { Vec2 } from "../../kicanvas/base/math";
 
 export class JunctionTool extends BaseTool {
   readonly type = ToolType.JUNCTION;
@@ -8,8 +9,9 @@ export class JunctionTool extends BaseTool {
   handleEvent(evt: ToolEvent): void {
     if (evt.type !== "mousedown" && evt.type !== "click") return;
 
-    const junction = new SchJunction(evt.pos);
-    this.ctx.doc.commitAdd(junction, "Place junction");
-    this.ctx.callbacks.requestRedraw();
+    const pos = evt.pos instanceof Vec2 ? evt.pos : new Vec2(evt.pos.x, evt.pos.y);
+    const junction = KicadSchDoc.createJunction(pos);
+    this.ctx.doc.commitAdd(junction as any, "Place junction");
+    this.ctx.callbacks.requestRepaint();
   }
 }

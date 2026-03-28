@@ -1,32 +1,36 @@
+import { Vec2 } from "../../kicanvas/base/math";
+import { Wire, Bus } from "../../kicanvas/kicad/schematic";
+import { KicadSchDoc } from "../kicad-sch-doc";
 import { BaseTool } from "./base-tool";
 import { ToolType, type ToolEvent } from "../tool-types";
-import { SchLine, SchJunction } from "../items";
-import { LineMode, type Vec2 } from "../types";
+import { LineMode } from "../types";
 import { ChangeType } from "../undo";
+
+type WireItem = Wire | Bus;
 
 export class WireTool extends BaseTool {
   readonly type: ToolType;
 
-  private wireSegments: SchLine[] = [];
+  private wireSegments: WireItem[] = [];
   private wirePosture = false;
   lineMode: LineMode = LineMode.ORTHO_90;
-  private layer: "wire" | "bus";
+  private isBus: boolean;
 
   constructor(ctx: ConstructorParameters<typeof BaseTool>[0], toolType: ToolType.WIRE | ToolType.BUS) {
     super(ctx);
     this.type = toolType;
-    this.layer = toolType === ToolType.BUS ? "bus" : "wire";
+    this.isBus = toolType === ToolType.BUS;
   }
 
   onDeactivate(): void {
     if (this.wireSegments.length > 0) {
       for (const seg of this.wireSegments) {
-        this.ctx.doc.removeItem(seg);
+        this.ctx.doc.removeItem(seg as any);
       }
       this.wireSegments = [];
     }
     this.ctx.doc.undo.revert();
-    this.ctx.callbacks.requestRedraw();
+    this.ctx.callbacks.requestRepaint();
   }
 
   handleEvent(evt: ToolEvent): void {
@@ -62,11 +66,42 @@ export class WireTool extends BaseTool {
     }
   }
 
+  private createSegment(start: Vec2, end: Vec2): WireItem {
+    if (this.isBus) {
+      return KicadSchDoc.createBus([start, end]);
+    } else {
+      return KicadSchDoc.createWire([start, end]);
+    }
+  }
+
+  private getStart(seg: WireItem): Vec2 {
+    return seg.pts[0]!;
+  }
+
+  private getEnd(seg: WireItem): Vec2 {
+    return seg.pts[seg.pts.length - 1]!;
+  }
+
+  private setEnd(seg: WireItem, pos: Vec2): void {
+    seg.pts[seg.pts.length - 1] = pos.copy();
+  }
+
+  private setStart(seg: WireItem, pos: Vec2): void {
+    seg.pts[0] = pos.copy();
+  }
+
+  private isNull(seg: WireItem): boolean {
+    const s = seg.pts[0]!;
+    const e = seg.pts[seg.pts.length - 1]!;
+    return Math.abs(s.x - e.x) < 0.001 && Math.abs(s.y - e.y) < 0.001;
+  }
+
   private startWire(pos: Vec2): void {
-    const seg1 = new SchLine(pos, pos, this.layer);
-    const seg2 = new SchLine(pos, pos, this.layer);
-    this.ctx.doc.addItem(seg1);
-    this.ctx.doc.addItem(seg2);
+    const p = pos instanceof Vec2 ? pos : new Vec2(pos.x, pos.y);
+    const seg1 = this.createSegment(p, p);
+    const seg2 = this.createSegment(p, p);
+    this.ctx.doc.addItem(seg1 as any);
+    this.ctx.doc.addItem(seg2 as any);
     this.wireSegments = [seg1, seg2];
     this.wirePosture = false;
     this.ctx.callbacks.showStatus("Drawing wire... Click to place, Dbl-click/Esc to finish");
@@ -77,14 +112,15 @@ export class WireTool extends BaseTool {
 
     const seg1 = this.wireSegments[this.wireSegments.length - 2]!;
     const seg2 = this.wireSegments[this.wireSegments.length - 1]!;
-    const start = seg1.start;
+    const start = this.getStart(seg1);
+    const c = cursor instanceof Vec2 ? cursor : new Vec2(cursor.x, cursor.y);
 
-    const breakPt = this.computeBreakPoint(start, cursor);
-    seg1.end = breakPt;
-    seg2.start = breakPt;
-    seg2.end = cursor;
+    const breakPt = this.computeBreakPoint(start, c);
+    this.setEnd(seg1, breakPt);
+    this.setStart(seg2, breakPt);
+    this.setEnd(seg2, c);
 
-    this.ctx.callbacks.requestRedraw();
+    this.ctx.callbacks.requestRepaint();
   }
 
   private computeBreakPoint(start: Vec2, cursor: Vec2): Vec2 {
@@ -92,14 +128,14 @@ export class WireTool extends BaseTool {
     const dy = cursor.y - start.y;
 
     if (this.lineMode === LineMode.FREE) {
-      return { ...cursor };
+      return cursor.copy();
     }
 
     if (this.lineMode === LineMode.ORTHO_90) {
       if (this.wirePosture) {
-        return { x: start.x, y: cursor.y };
+        return new Vec2(start.x, cursor.y);
       } else {
-        return { x: cursor.x, y: start.y };
+        return new Vec2(cursor.x, start.y);
       }
     }
 
@@ -111,12 +147,12 @@ export class WireTool extends BaseTool {
     const yDir = dy >= 0 ? 1 : -1;
 
     if (this.wirePosture) {
-      return { x: start.x + xDir * minD, y: start.y + yDir * minD };
+      return new Vec2(start.x + xDir * minD, start.y + yDir * minD);
     } else {
       if (absDx > absDy) {
-        return { x: cursor.x - xDir * minD, y: start.y };
+        return new Vec2(cursor.x - xDir * minD, start.y);
       } else {
-        return { x: start.x, y: cursor.y - yDir * minD };
+        return new Vec2(start.x, cursor.y - yDir * minD);
       }
     }
   }
@@ -127,24 +163,25 @@ export class WireTool extends BaseTool {
     const lastSeg = this.wireSegments[this.wireSegments.length - 1]!;
     const prevSeg = this.wireSegments[this.wireSegments.length - 2]!;
 
-    if (prevSeg.isNull()) {
-      this.ctx.doc.removeItem(prevSeg);
+    if (this.isNull(prevSeg)) {
+      this.ctx.doc.removeItem(prevSeg as any);
       this.wireSegments.splice(this.wireSegments.length - 2, 1);
     }
 
-    const connected = this.ctx.doc.findConnectableAt(pos, lastSeg);
+    const p = pos instanceof Vec2 ? pos : new Vec2(pos.x, pos.y);
+    const connected = this.ctx.doc.findConnectableAt(p, lastSeg as any);
     if (connected.length > 0 && this.wireSegments.length > 1) {
-      lastSeg.end = pos;
-      if (!lastSeg.isNull()) {
+      this.setEnd(lastSeg, p);
+      if (!this.isNull(lastSeg)) {
         this.finishWire();
         return;
       }
     }
 
-    const newSeg1 = new SchLine(pos, pos, this.layer);
-    const newSeg2 = new SchLine(pos, pos, this.layer);
-    this.ctx.doc.addItem(newSeg1);
-    this.ctx.doc.addItem(newSeg2);
+    const newSeg1 = this.createSegment(p, p);
+    const newSeg2 = this.createSegment(p, p);
+    this.ctx.doc.addItem(newSeg1 as any);
+    this.ctx.doc.addItem(newSeg2 as any);
     this.wireSegments.push(newSeg1, newSeg2);
     this.wirePosture = false;
   }
@@ -153,26 +190,27 @@ export class WireTool extends BaseTool {
     if (this.wireSegments.length <= 2) return;
     const removed1 = this.wireSegments.pop()!;
     const removed2 = this.wireSegments.pop()!;
-    this.ctx.doc.removeItem(removed1);
-    this.ctx.doc.removeItem(removed2);
-    this.ctx.callbacks.requestRedraw();
+    this.ctx.doc.removeItem(removed1 as any);
+    this.ctx.doc.removeItem(removed2 as any);
+    this.ctx.callbacks.requestRepaint();
   }
 
   private finishWire(): void {
-    const toKeep: SchLine[] = [];
+    const toKeep: WireItem[] = [];
     for (const seg of this.wireSegments) {
-      if (!seg.isNull()) {
+      if (!this.isNull(seg)) {
         toKeep.push(seg);
       } else {
-        this.ctx.doc.removeItem(seg);
+        this.ctx.doc.removeItem(seg as any);
       }
     }
 
     for (const seg of toKeep) {
-      for (const cp of seg.getConnectionPoints()) {
+      const cps = (seg as any).getConnectionPoints();
+      for (const cp of cps) {
         if (this.ctx.doc.needsJunction(cp) && !this.ctx.doc.hasJunctionAt(cp)) {
-          const junction = new SchJunction(cp);
-          this.ctx.doc.addItem(junction);
+          const junction = KicadSchDoc.createJunction(cp);
+          this.ctx.doc.addItem(junction as any);
           this.ctx.doc.undo.stage(junction, ChangeType.ADD);
         }
       }
@@ -184,7 +222,7 @@ export class WireTool extends BaseTool {
 
     this.ctx.doc.commitPush("Draw wire");
     this.wireSegments = [];
-    this.ctx.callbacks.requestRedraw();
+    this.ctx.callbacks.requestRepaint();
     this.ctx.callbacks.showStatus("Wire placed");
   }
 }

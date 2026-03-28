@@ -1,9 +1,9 @@
 // Tool system - thin dispatcher that delegates to individual tool classes
 
-import type { ISymbolLibrary, BBox } from "./types";
-import { SchematicDoc } from "./schematic-doc";
+import { KicadSchDoc } from "./kicad-sch-doc";
 import { GridHelper } from "./grid";
 import { ChangeType } from "./undo";
+import type { EditableItem } from "../kicanvas/kicad/schematic-edit";
 import {
   ToolType,
   type ToolEvent,
@@ -18,16 +18,17 @@ import { SymbolTool } from "./tools/symbol-tool";
 import { JunctionTool } from "./tools/junction-tool";
 import { NoConnectTool } from "./tools/no-connect-tool";
 import { MoveTool } from "./tools/move-tool";
+import type { ISymbolLibrary } from "./types";
 
 // Re-export for consumers
 export { ToolType, type ToolEvent, type ToolEventType, type EditorCallback };
 
 export class ToolManager {
-  doc: SchematicDoc;
+  doc: KicadSchDoc;
   grid = new GridHelper();
   activeTool: ToolType = ToolType.SELECT;
   callbacks: EditorCallback;
-  selection: Set<string> = new Set();
+  selection: Set<EditableItem> = new Set();
 
   private tools: Map<ToolType, BaseTool>;
   private currentTool: BaseTool;
@@ -37,7 +38,7 @@ export class ToolManager {
     if (symbolTool) symbolTool.symLibrary = lib;
   }
 
-  constructor(doc: SchematicDoc, callbacks: EditorCallback) {
+  constructor(doc: KicadSchDoc, callbacks: EditorCallback) {
     this.doc = doc;
     this.callbacks = callbacks;
 
@@ -65,9 +66,14 @@ export class ToolManager {
   }
 
   /** Returns the current marquee selection rect, or null */
-  get marqueeRect(): BBox | null {
+  get marqueeRect(): { x: number; y: number; width: number; height: number } | null {
     const sel = this.tools.get(ToolType.SELECT) as SelectTool | undefined;
     return sel?.marqueeRect ?? null;
+  }
+
+  /** Get the current tool instance (for paintOverlay) */
+  get currentToolInstance(): BaseTool {
+    return this.currentTool;
   }
 
   // ==================== Tool Switching ====================
@@ -113,7 +119,7 @@ export class ToolManager {
         const desc = this.doc.performUndo();
         if (desc) this.callbacks.showStatus(`Undo: ${desc}`);
       }
-      this.callbacks.requestRedraw();
+      this.callbacks.requestRepaint();
       return;
     }
 
@@ -159,56 +165,46 @@ export class ToolManager {
 
   // ==================== Edit Operations ====================
 
-  rotateSelection(center: { x: number; y: number }): void {
+  rotateSelection(center: Vec2Like): void {
     if (this.selection.size === 0) return;
-    for (const id of this.selection) {
-      const item = this.doc.getItem(id);
-      if (item) {
-        this.doc.commitModify(item);
-        item.rotate(center, false);
-      }
+    for (const item of this.selection) {
+      this.doc.commitModify(item);
+      item.rotate({ x: center.x, y: center.y } as any, false);
     }
     this.doc.commitPush("Rotate");
-    this.callbacks.requestRedraw();
+    this.callbacks.requestRepaint();
   }
 
-  mirrorSelectionH(center: { x: number; y: number }): void {
+  mirrorSelectionH(center: Vec2Like): void {
     if (this.selection.size === 0) return;
-    for (const id of this.selection) {
-      const item = this.doc.getItem(id);
-      if (item) {
-        this.doc.commitModify(item);
-        item.mirrorH(center.x);
-      }
+    for (const item of this.selection) {
+      this.doc.commitModify(item);
+      item.mirrorH(center.x);
     }
     this.doc.commitPush("Mirror horizontal");
-    this.callbacks.requestRedraw();
+    this.callbacks.requestRepaint();
   }
 
-  mirrorSelectionV(center: { x: number; y: number }): void {
+  mirrorSelectionV(center: Vec2Like): void {
     if (this.selection.size === 0) return;
-    for (const id of this.selection) {
-      const item = this.doc.getItem(id);
-      if (item) {
-        this.doc.commitModify(item);
-        item.mirrorV(center.y);
-      }
+    for (const item of this.selection) {
+      this.doc.commitModify(item);
+      item.mirrorV(center.y);
     }
     this.doc.commitPush("Mirror vertical");
-    this.callbacks.requestRedraw();
+    this.callbacks.requestRepaint();
   }
 
   deleteSelection(): void {
     if (this.selection.size === 0) return;
-    for (const id of this.selection) {
-      const item = this.doc.getItem(id);
-      if (item) {
-        this.doc.undo.stage(item, ChangeType.REMOVE);
-        this.doc.removeItem(item);
-      }
+    for (const item of this.selection) {
+      this.doc.undo.stage(item, ChangeType.REMOVE);
+      this.doc.removeItem(item);
     }
     this.doc.commitPush("Delete");
     this.selection.clear();
-    this.callbacks.requestRedraw();
+    this.callbacks.requestRepaint();
   }
 }
+
+interface Vec2Like { x: number; y: number }

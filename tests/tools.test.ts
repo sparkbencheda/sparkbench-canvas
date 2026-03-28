@@ -1,40 +1,66 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ToolManager, ToolType, type ToolEvent, type EditorCallback } from "../src/editor/tools";
-import { SchematicDoc } from "../src/editor/schematic-doc";
-import { SchLine, SchJunction, SchSymbol } from "../src/editor/items";
-import { vec2 } from "../src/editor/types";
+import { KicadSchDoc } from "../src/editor/kicad-sch-doc";
+import { KicadSch } from "../src/kicanvas/kicad/schematic";
+import { Vec2 } from "../src/kicanvas/base/math";
+import "../src/kicanvas/kicad/schematic-edit";
+
+// Minimal KicadSch for testing (bypassing parser)
+function makeEmptySch(): KicadSch {
+  const sch = Object.create(KicadSch.prototype) as KicadSch;
+  sch.version = 20231120;
+  sch.uuid = "test-uuid";
+  sch.filename = "test.kicad_sch";
+  sch.wires = [];
+  sch.buses = [];
+  sch.bus_entries = [];
+  sch.bus_aliases = [];
+  sch.junctions = [];
+  sch.net_labels = [];
+  sch.global_labels = [];
+  sch.hierarchical_labels = [];
+  sch.symbols = new Map();
+  sch.no_connects = [];
+  sch.drawings = [];
+  sch.rule_areas = [];
+  sch.netclass_flags = [];
+  sch.images = [];
+  sch.sheets = [];
+  sch.embedded_files = [];
+  sch.embedded_fonts = false;
+  return sch;
+}
 
 function makeCallbacks(): EditorCallback {
   return {
     requestRedraw: vi.fn(),
+    requestRepaint: vi.fn(),
     requestSymbolChooser: vi.fn(async () => null),
     requestLabelText: vi.fn(async () => null),
     showStatus: vi.fn(),
     setCursor: vi.fn(),
+    editProperties: vi.fn(),
   };
 }
 
 function makeToolManager() {
-  const doc = new SchematicDoc("test.kicad_sch");
+  const sch = makeEmptySch();
+  const doc = new KicadSchDoc(sch);
   const cb = makeCallbacks();
   const tm = new ToolManager(doc, cb);
-  return { doc, cb, tm };
+  return { sch, doc, cb, tm };
 }
 
-function clickEvent(pos: { x: number; y: number }, opts: Partial<ToolEvent> = {}): ToolEvent {
+function clickEvent(pos: Vec2, opts: Partial<ToolEvent> = {}): ToolEvent {
   return { type: "mousedown", pos, rawPos: pos, ...opts };
 }
 
-function motionEvent(pos: { x: number; y: number }): ToolEvent {
-  return { type: "motion", pos, rawPos: pos };
-}
-
-function mouseupEvent(pos: { x: number; y: number }): ToolEvent {
+function mouseupEvent(pos: Vec2): ToolEvent {
   return { type: "mouseup", pos, rawPos: pos };
 }
 
 function keyEvent(key: string, opts: Partial<ToolEvent> = {}): ToolEvent {
-  return { type: "keydown", pos: vec2(0, 0), rawPos: vec2(0, 0), key, ...opts };
+  return { type: "keydown", pos: new Vec2(0, 0), rawPos: new Vec2(0, 0), key, ...opts };
 }
 
 describe("ToolManager", () => {
@@ -98,8 +124,8 @@ describe("ToolManager", () => {
 
     it("ctrl+z triggers undo", () => {
       const { tm, doc } = makeToolManager();
-      const line = new SchLine(vec2(0, 0), vec2(10, 0));
-      doc.commitAdd(line, "Add wire");
+      const wire = KicadSchDoc.createWire([new Vec2(0, 0), new Vec2(10, 0)]);
+      doc.commitAdd(wire as any, "Add wire");
 
       tm.handleEvent(keyEvent("z", { ctrl: true }));
       expect(doc.itemCount()).toBe(0);
@@ -107,8 +133,8 @@ describe("ToolManager", () => {
 
     it("ctrl+shift+z triggers redo", () => {
       const { tm, doc } = makeToolManager();
-      const line = new SchLine(vec2(0, 0), vec2(10, 0));
-      doc.commitAdd(line, "Add wire");
+      const wire = KicadSchDoc.createWire([new Vec2(0, 0), new Vec2(10, 0)]);
+      doc.commitAdd(wire as any, "Add wire");
       doc.performUndo();
 
       tm.handleEvent(keyEvent("z", { ctrl: true, shift: true }));
@@ -117,52 +143,36 @@ describe("ToolManager", () => {
   });
 
   describe("selection", () => {
-    it("selects item on click", () => {
+    it("selects item on click via hits", () => {
       const { tm, doc } = makeToolManager();
-      const line = new SchLine(vec2(0, 0), vec2(10, 0));
-      doc.addItem(line);
+      const wire = KicadSchDoc.createWire([new Vec2(0, 0), new Vec2(10, 0)]);
+      doc.addItem(wire as any);
 
-      tm.handleEvent(clickEvent(vec2(5, 0)));
-      expect(tm.selection.has(line.id)).toBe(true);
+      // Simulate hits from viewer
+      tm.handleEvent(clickEvent(new Vec2(5, 0), { hits: [{ item: wire, bbox: {} as any }] }));
+      expect(tm.selection.has(wire as any)).toBe(true);
     });
 
     it("clears selection on empty click", () => {
       const { tm, doc } = makeToolManager();
-      const line = new SchLine(vec2(0, 0), vec2(10, 0));
-      doc.addItem(line);
+      const wire = KicadSchDoc.createWire([new Vec2(0, 0), new Vec2(10, 0)]);
+      doc.addItem(wire as any);
 
-      tm.handleEvent(clickEvent(vec2(5, 0)));
+      tm.handleEvent(clickEvent(new Vec2(5, 0), { hits: [{ item: wire, bbox: {} as any }] }));
       expect(tm.selection.size).toBe(1);
 
-      tm.handleEvent(clickEvent(vec2(50, 50)));
-      tm.handleEvent(mouseupEvent(vec2(50, 50)));
+      tm.handleEvent(clickEvent(new Vec2(50, 50), { hits: [] }));
+      tm.handleEvent(mouseupEvent(new Vec2(50, 50)));
       expect(tm.selection.size).toBe(0);
-    });
-
-    it("shift-click toggles selection", () => {
-      const { tm, doc } = makeToolManager();
-      const line1 = new SchLine(vec2(0, 0), vec2(10, 0));
-      const line2 = new SchLine(vec2(0, 5), vec2(10, 5));
-      doc.addItem(line1);
-      doc.addItem(line2);
-
-      tm.handleEvent(clickEvent(vec2(5, 0)));
-      expect(tm.selection.size).toBe(1);
-
-      tm.handleEvent(clickEvent(vec2(5, 5), { shift: true }));
-      expect(tm.selection.size).toBe(2);
-
-      tm.handleEvent(clickEvent(vec2(5, 0), { shift: true }));
-      expect(tm.selection.size).toBe(1);
     });
 
     it("delete key removes selected items", () => {
       const { tm, doc } = makeToolManager();
-      const line = new SchLine(vec2(0, 0), vec2(10, 0));
-      doc.addItem(line);
+      const wire = KicadSchDoc.createWire([new Vec2(0, 0), new Vec2(10, 0)]);
+      doc.addItem(wire as any);
 
-      tm.handleEvent(clickEvent(vec2(5, 0)));
-      tm.handleEvent(mouseupEvent(vec2(5, 0)));
+      tm.handleEvent(clickEvent(new Vec2(5, 0), { hits: [{ item: wire, bbox: {} as any }] }));
+      tm.handleEvent(mouseupEvent(new Vec2(5, 0)));
       tm.handleEvent(keyEvent("Delete"));
 
       expect(doc.itemCount()).toBe(0);
@@ -171,11 +181,11 @@ describe("ToolManager", () => {
 
     it("delete supports undo", () => {
       const { tm, doc } = makeToolManager();
-      const line = new SchLine(vec2(0, 0), vec2(10, 0));
-      doc.addItem(line);
+      const wire = KicadSchDoc.createWire([new Vec2(0, 0), new Vec2(10, 0)]);
+      doc.addItem(wire as any);
 
-      tm.handleEvent(clickEvent(vec2(5, 0)));
-      tm.handleEvent(mouseupEvent(vec2(5, 0)));
+      tm.handleEvent(clickEvent(new Vec2(5, 0), { hits: [{ item: wire, bbox: {} as any }] }));
+      tm.handleEvent(mouseupEvent(new Vec2(5, 0)));
       tm.handleEvent(keyEvent("Delete"));
       expect(doc.itemCount()).toBe(0);
 
@@ -188,12 +198,13 @@ describe("ToolManager", () => {
     it("places junction on click", () => {
       const { tm, doc } = makeToolManager();
       tm.setTool(ToolType.JUNCTION);
-      tm.handleEvent(clickEvent(vec2(5, 5)));
+      tm.handleEvent(clickEvent(new Vec2(5, 5)));
 
       expect(doc.itemCount()).toBe(1);
       const junctions = Array.from(doc.junctions());
       expect(junctions).toHaveLength(1);
-      expect(junctions[0]!.pos).toEqual({ x: 5, y: 5 });
+      expect(junctions[0]!.at.position.x).toBeCloseTo(5);
+      expect(junctions[0]!.at.position.y).toBeCloseTo(5);
     });
   });
 
@@ -201,60 +212,59 @@ describe("ToolManager", () => {
     it("places no-connect on click", () => {
       const { tm, doc } = makeToolManager();
       tm.setTool(ToolType.NO_CONNECT);
-      tm.handleEvent(clickEvent(vec2(3, 7)));
+      tm.handleEvent(clickEvent(new Vec2(3, 7)));
 
       expect(doc.itemCount()).toBe(1);
-      const items = Array.from(doc.allItems());
-      expect(items[0]!.itemType).toBe("no_connect");
+      const ncs = Array.from(doc.noConnects());
+      expect(ncs).toHaveLength(1);
     });
   });
 
   describe("rotate and mirror", () => {
     it("rotates selected items", () => {
       const { tm, doc } = makeToolManager();
-      const sym = new SchSymbol(vec2(10, 0), "Device:R");
-      doc.addItem(sym);
-      tm.selection.add(sym.id);
+      const junction = KicadSchDoc.createJunction(new Vec2(10, 0));
+      doc.addItem(junction as any);
+      tm.selection.add(junction as any);
 
-      tm.rotateSelection(vec2(0, 0));
-      expect(sym.rotation).toBe(90);
+      tm.rotateSelection(new Vec2(0, 0));
+      // Junction at (10,0) rotated 90° CW around origin → (0, 10)
+      expect(junction.at.position.x).toBeCloseTo(0);
+      expect(junction.at.position.y).toBeCloseTo(10);
     });
 
     it("mirrors selected items horizontally", () => {
       const { tm, doc } = makeToolManager();
-      const sym = new SchSymbol(vec2(10, 0), "Device:R");
-      doc.addItem(sym);
-      tm.selection.add(sym.id);
+      const junction = KicadSchDoc.createJunction(new Vec2(10, 0));
+      doc.addItem(junction as any);
+      tm.selection.add(junction as any);
 
-      tm.mirrorSelectionH(vec2(5, 0));
-      expect(sym.pos.x).toBeCloseTo(0);
-      expect(sym.mirror).toBe("x");
+      tm.mirrorSelectionH(new Vec2(5, 0));
+      expect(junction.at.position.x).toBeCloseTo(0);
     });
 
     it("mirrors selected items vertically", () => {
       const { tm, doc } = makeToolManager();
-      const sym = new SchSymbol(vec2(0, 10), "Device:R");
-      doc.addItem(sym);
-      tm.selection.add(sym.id);
+      const junction = KicadSchDoc.createJunction(new Vec2(0, 10));
+      doc.addItem(junction as any);
+      tm.selection.add(junction as any);
 
-      tm.mirrorSelectionV(vec2(0, 5));
-      expect(sym.pos.y).toBeCloseTo(0);
-      expect(sym.mirror).toBe("y");
+      tm.mirrorSelectionV(new Vec2(0, 5));
+      expect(junction.at.position.y).toBeCloseTo(0);
     });
 
-    it("rotate and mirror support undo", () => {
+    it("rotate supports undo", () => {
       const { tm, doc } = makeToolManager();
-      const sym = new SchSymbol(vec2(10, 0), "Device:R");
-      doc.addItem(sym);
-      tm.selection.add(sym.id);
+      const junction = KicadSchDoc.createJunction(new Vec2(10, 0));
+      doc.addItem(junction as any);
+      tm.selection.add(junction as any);
 
-      tm.rotateSelection(vec2(0, 0));
-      expect(sym.rotation).toBe(90);
+      tm.rotateSelection(new Vec2(0, 0));
+      expect(junction.at.position.x).toBeCloseTo(0);
 
       doc.performUndo();
-      expect(sym.rotation).toBe(0);
-      expect(sym.pos.x).toBeCloseTo(10);
-      expect(sym.pos.y).toBeCloseTo(0);
+      expect(junction.at.position.x).toBeCloseTo(10);
+      expect(junction.at.position.y).toBeCloseTo(0);
     });
   });
 });

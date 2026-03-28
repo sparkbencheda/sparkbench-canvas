@@ -1,7 +1,7 @@
 // Shared types for the tool system
 
-import type { Vec2 } from "./types";
-import type { SchItem } from "./items";
+import type { Vec2, BBox } from "../kicanvas/base/math";
+import type { EditableItem } from "../kicanvas/kicad/schematic-edit";
 
 export type ToolEventType =
   | "click"
@@ -20,6 +20,8 @@ export interface ToolEvent {
   shift?: boolean;
   ctrl?: boolean;
   button?: number;
+  /** Items under cursor from viewer layer queries */
+  hits?: Array<{ item: any; bbox: BBox }>;
 }
 
 export enum ToolType {
@@ -36,9 +38,10 @@ export enum ToolType {
 
 export type EditorCallback = {
   requestRedraw: () => void;
+  requestRepaint: () => void;
   requestSymbolChooser: () => Promise<string | null>;
   requestLabelText: (current?: string) => Promise<string | null>;
   showStatus: (msg: string) => void;
   setCursor: (cursor: string) => void;
-  editProperties: (item: SchItem) => void;
+  editProperties: (item: EditableItem) => void;
 };

@@ -1,23 +1,22 @@
 import { BaseTool } from "./base-tool";
 import { ToolType, type ToolEvent } from "../tool-types";
-import type { SchItem } from "../items";
-import { vec2Sub } from "../types";
-import type { Vec2, BBox } from "../types";
+import type { EditableItem } from "../../kicanvas/kicad/schematic-edit";
+import type { Vec2 } from "../../kicanvas/base/math";
 
 export class SelectTool extends BaseTool {
   readonly type = ToolType.SELECT;
 
-  private moveItems: SchItem[] = [];
-  private moveOrigin: Vec2 = { x: 0, y: 0 };
+  private moveItems: EditableItem[] = [];
+  private moveOrigin: Vec2Like = { x: 0, y: 0 };
   private isDragging = false;
   private isMarquee = false;
-  private dragStartPos: Vec2 = { x: 0, y: 0 };
+  private dragStartPos: Vec2Like = { x: 0, y: 0 };
   private mouseDown = false;
   private hitOnDown = false;
   private dragThreshold = 0.5;
 
   /** Current marquee rectangle in world coords, or null if not active */
-  marqueeRect: BBox | null = null;
+  marqueeRect: { x: number; y: number; width: number; height: number } | null = null;
 
   onDeactivate(): void {
     this.moveItems = [];
@@ -33,22 +32,22 @@ export class SelectTool extends BaseTool {
       this.isDragging = false;
       this.isMarquee = false;
       this.marqueeRect = null;
-      this.dragStartPos = { ...evt.pos };
+      this.dragStartPos = { x: evt.pos.x, y: evt.pos.y };
 
-      const hits = this.ctx.doc.hitTest(evt.pos, 2);
-      const topHit = this.pickBest(hits);
+      // Use hits from viewer layer queries if available, otherwise empty
+      const topHit = this.pickBestFromHits(evt.hits);
       this.hitOnDown = !!topHit;
 
       if (topHit) {
         if (evt.shift) {
-          if (this.ctx.selection.has(topHit.id)) {
-            this.ctx.selection.delete(topHit.id);
+          if (this.ctx.selection.has(topHit)) {
+            this.ctx.selection.delete(topHit);
           } else {
-            this.ctx.selection.add(topHit.id);
+            this.ctx.selection.add(topHit);
           }
-        } else if (!this.ctx.selection.has(topHit.id)) {
+        } else if (!this.ctx.selection.has(topHit)) {
           this.ctx.selection.clear();
-          this.ctx.selection.add(topHit.id);
+          this.ctx.selection.add(topHit);
         }
       } else if (!evt.shift) {
         this.ctx.selection.clear();
@@ -61,35 +60,30 @@ export class SelectTool extends BaseTool {
       const dy = evt.pos.y - this.dragStartPos.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
-      // Start move drag (when items are selected and we clicked on one)
       if (!this.isDragging && !this.isMarquee && dist > this.dragThreshold && this.hitOnDown && this.ctx.selection.size > 0) {
         this.isDragging = true;
         this.moveItems = [];
-        for (const id of this.ctx.selection) {
-          const item = this.ctx.doc.getItem(id);
-          if (item) {
-            this.ctx.doc.commitModify(item);
-            this.moveItems.push(item);
-          }
+        for (const item of this.ctx.selection) {
+          this.ctx.doc.commitModify(item);
+          this.moveItems.push(item);
         }
-        this.moveOrigin = { ...this.dragStartPos };
+        this.moveOrigin = { x: this.dragStartPos.x, y: this.dragStartPos.y };
         this.ctx.callbacks.setCursor("grabbing");
         this.ctx.callbacks.showStatus("Dragging...");
       }
 
-      // Start marquee drag (when we clicked on empty space)
       if (!this.isDragging && !this.isMarquee && dist > this.dragThreshold && !this.hitOnDown) {
         this.isMarquee = true;
         this.ctx.callbacks.setCursor("crosshair");
       }
 
       if (this.isDragging && this.moveItems.length > 0) {
-        const delta = vec2Sub(evt.pos, this.moveOrigin);
+        const delta = { x: evt.pos.x - this.moveOrigin.x, y: evt.pos.y - this.moveOrigin.y };
         for (const item of this.moveItems) {
-          item.move(delta);
+          item.move(delta as any);
         }
-        this.moveOrigin = { ...evt.pos };
-        this.ctx.callbacks.requestRedraw();
+        this.moveOrigin = { x: evt.pos.x, y: evt.pos.y };
+        this.ctx.callbacks.requestRepaint();
       }
 
       if (this.isMarquee) {
@@ -109,19 +103,15 @@ export class SelectTool extends BaseTool {
         this.isDragging = false;
         this.ctx.callbacks.setCursor("default");
         this.ctx.callbacks.showStatus("Moved");
+        this.ctx.callbacks.requestRepaint();
       }
 
       if (this.isMarquee && this.marqueeRect) {
-        const items = this.ctx.doc.itemsInArea(this.marqueeRect);
-        if (!evt.shift) this.ctx.selection.clear();
-        for (const item of items) {
-          this.ctx.selection.add(item.id);
-        }
+        // Select items in marquee using viewer hits
+        // For now, we'll rely on the viewer's selectItemsInArea being called externally
         this.isMarquee = false;
         this.marqueeRect = null;
         this.ctx.callbacks.setCursor("default");
-        const count = this.ctx.selection.size;
-        if (count > 0) this.ctx.callbacks.showStatus(`Selected ${count} item${count > 1 ? "s" : ""}`);
       }
 
       this.mouseDown = false;
@@ -132,21 +122,18 @@ export class SelectTool extends BaseTool {
     }
 
     if (evt.type === "dblclick") {
-      const hits = this.ctx.doc.hitTest(evt.pos, 2);
-      const topHit = this.pickBest(hits);
+      const topHit = this.pickBestFromHits(evt.hits);
       if (topHit) {
         this.ctx.callbacks.editProperties(topHit);
       }
     }
   }
 
-  private pickBest(hits: SchItem[]): SchItem | null {
-    if (hits.length === 0) return null;
-    const priority: Record<string, number> = {
-      junction: 0, no_connect: 0, label: 1, global_label: 1,
-      hier_label: 1, wire: 2, bus: 3, symbol: 4, sheet: 5,
-    };
-    hits.sort((a, b) => (priority[a.itemType] ?? 9) - (priority[b.itemType] ?? 9));
-    return hits[0] ?? null;
+  private pickBestFromHits(hits?: Array<{ item: any; bbox: any }>): EditableItem | null {
+    if (!hits || hits.length === 0) return null;
+    // Return the first hit (viewer already orders by layer priority)
+    return hits[0]!.item as EditableItem;
   }
 }
+
+interface Vec2Like { x: number; y: number }

@@ -1,10 +1,10 @@
 // Test harness entry point - exposes editor internals on window for Playwright
-import { SchematicDoc } from "../../src/editor/schematic-doc";
+import { KicadSchDoc } from "../../src/editor/kicad-sch-doc";
 import { ToolManager, ToolType, type ToolEvent, type EditorCallback } from "../../src/editor/tools";
-import { EditorRenderer, type ViewTransform } from "../../src/webview/editor-renderer";
 import { GridHelper } from "../../src/editor/grid";
-import { SchLine, SchJunction, SchLabel, SchSymbol, SchNoConnect } from "../../src/editor/items";
-import { vec2 } from "../../src/editor/types";
+import { KicadSch, Wire, Junction, NoConnect, NetLabel, GlobalLabel } from "../../src/kicanvas/kicad/schematic";
+import { Vec2 } from "../../src/kicanvas/base/math";
+import "../../src/kicanvas/kicad/schematic-edit";
 
 declare global {
   interface Window {
@@ -12,10 +12,36 @@ declare global {
   }
 }
 
+// Create a minimal empty KicadSch (bypassing parser)
+function makeEmptySch(): KicadSch {
+  const sch = Object.create(KicadSch.prototype) as KicadSch;
+  sch.version = 20231120;
+  sch.uuid = "test-uuid";
+  sch.filename = "test.kicad_sch";
+  sch.wires = [];
+  sch.buses = [];
+  sch.bus_entries = [];
+  sch.bus_aliases = [];
+  sch.junctions = [];
+  sch.net_labels = [];
+  sch.global_labels = [];
+  sch.hierarchical_labels = [];
+  sch.symbols = new Map();
+  sch.no_connects = [];
+  sch.drawings = [];
+  sch.rule_areas = [];
+  sch.netclass_flags = [];
+  sch.images = [];
+  sch.sheets = [];
+  sch.embedded_files = [];
+  sch.embedded_fonts = false;
+  return sch;
+}
+
 class TestHarness {
-  doc: SchematicDoc;
+  sch: KicadSch;
+  doc: KicadSchDoc;
   tools: ToolManager;
-  renderer: EditorRenderer;
   canvas: HTMLCanvasElement;
   statusLog: string[] = [];
   cursorLog: string[] = [];
@@ -26,15 +52,15 @@ class TestHarness {
     this.canvas.width = 800;
     this.canvas.height = 600;
 
-    this.renderer = new EditorRenderer(this.canvas);
-    this.renderer.setTransform({ offsetX: 400, offsetY: 300, scale: 40 });
-
-    this.doc = new SchematicDoc("test.kicad_sch");
+    this.sch = makeEmptySch();
+    this.doc = new KicadSchDoc(this.sch);
 
     const callbacks: EditorCallback = {
       requestRedraw: () => {
         this.redrawCount++;
-        this.draw();
+      },
+      requestRepaint: () => {
+        this.redrawCount++;
       },
       requestSymbolChooser: async () => {
         // Auto-return a test symbol for testing
@@ -52,60 +78,61 @@ class TestHarness {
         this.cursorLog.push(cursor);
         this.canvas.style.cursor = cursor;
       },
+      editProperties: () => {},
     };
 
     this.tools = new ToolManager(this.doc, callbacks);
-    this.draw();
   }
 
   draw() {
-    this.renderer.clear();
-    this.renderer.drawGrid(this.tools.grid.gridSize);
-    this.renderer.drawDoc(this.doc, this.tools.selection);
+    // No-op: unified renderer doesn't use EditorRenderer in standalone mode
+    this.redrawCount++;
   }
 
   // Simulate mouse events in world coordinates
   clickAt(worldX: number, worldY: number, opts: { shift?: boolean; dbl?: boolean } = {}) {
-    const snapped = this.tools.grid.snapToGrid(vec2(worldX, worldY));
-    const raw = vec2(worldX, worldY);
+    const pos = new Vec2(worldX, worldY);
+    const snapped = this.tools.grid.snapToGrid(pos);
+    const snappedVec = new Vec2(snapped.x, snapped.y);
 
     this.tools.handleEvent({
       type: "mousedown",
-      pos: snapped,
-      rawPos: raw,
+      pos: snappedVec,
+      rawPos: pos,
       shift: opts.shift,
     });
 
     this.tools.handleEvent({
       type: "mouseup",
-      pos: snapped,
-      rawPos: raw,
+      pos: snappedVec,
+      rawPos: pos,
       shift: opts.shift,
     });
 
     if (opts.dbl) {
       this.tools.handleEvent({
         type: "dblclick",
-        pos: snapped,
-        rawPos: raw,
+        pos: snappedVec,
+        rawPos: pos,
       });
     }
   }
 
   moveTo(worldX: number, worldY: number) {
-    const snapped = this.tools.grid.snapToGrid(vec2(worldX, worldY));
+    const pos = new Vec2(worldX, worldY);
+    const snapped = this.tools.grid.snapToGrid(pos);
     this.tools.handleEvent({
       type: "motion",
-      pos: snapped,
-      rawPos: vec2(worldX, worldY),
+      pos: new Vec2(snapped.x, snapped.y),
+      rawPos: pos,
     });
   }
 
   pressKey(key: string, opts: { ctrl?: boolean; shift?: boolean } = {}) {
     this.tools.handleEvent({
       type: "keydown",
-      pos: vec2(0, 0),
-      rawPos: vec2(0, 0),
+      pos: new Vec2(0, 0),
+      rawPos: new Vec2(0, 0),
       key,
       ctrl: opts.ctrl,
       shift: opts.shift,
@@ -124,32 +151,54 @@ class TestHarness {
 
   getWires() {
     return Array.from(this.doc.wires()).map(w => ({
-      id: w.id,
-      startX: w.start.x, startY: w.start.y,
-      endX: w.end.x, endY: w.end.y,
-      layer: w.layer,
-      isNull: w.isNull(),
+      id: w.uuid,
+      startX: w.pts[0]?.x ?? 0,
+      startY: w.pts[0]?.y ?? 0,
+      endX: w.pts[w.pts.length - 1]?.x ?? 0,
+      endY: w.pts[w.pts.length - 1]?.y ?? 0,
+      isNull: w.pts.length >= 2 &&
+        Math.abs(w.pts[0]!.x - w.pts[w.pts.length - 1]!.x) < 0.001 &&
+        Math.abs(w.pts[0]!.y - w.pts[w.pts.length - 1]!.y) < 0.001,
     }));
   }
 
   getItems() {
-    return Array.from(this.doc.allItems()).map(item => ({
-      id: item.id,
-      type: item.itemType,
-    }));
+    const items: { id: string; type: string }[] = [];
+    for (const item of this.doc.allItems()) {
+      const type = item instanceof Wire ? "wire"
+        : item instanceof Junction ? "junction"
+        : item instanceof NoConnect ? "no_connect"
+        : item instanceof NetLabel ? "label"
+        : item instanceof GlobalLabel ? "global_label"
+        : "unknown";
+      items.push({ id: (item as any).uuid ?? "", type });
+    }
+    return items;
   }
 
   reset() {
-    // Clear everything for a fresh test
-    for (const item of Array.from(this.doc.allItems())) {
-      this.doc.removeItem(item);
-    }
-    this.tools.selection.clear();
-    this.tools.setTool(ToolType.SELECT);
+    this.sch = makeEmptySch();
+    this.doc = new KicadSchDoc(this.sch);
+
+    // Re-create tool manager with new doc
+    const callbacks: EditorCallback = {
+      requestRedraw: () => { this.redrawCount++; },
+      requestRepaint: () => { this.redrawCount++; },
+      requestSymbolChooser: async () => "Device:R",
+      requestLabelText: async () => "TEST_NET",
+      showStatus: (msg) => {
+        this.statusLog.push(msg);
+        const el = document.getElementById("status");
+        if (el) el.textContent = msg;
+      },
+      setCursor: (cursor) => { this.cursorLog.push(cursor); },
+      editProperties: () => {},
+    };
+
+    this.tools = new ToolManager(this.doc, callbacks);
     this.statusLog = [];
     this.cursorLog = [];
     this.redrawCount = 0;
-    this.draw();
   }
 }
 

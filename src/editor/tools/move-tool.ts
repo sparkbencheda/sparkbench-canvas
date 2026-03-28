@@ -1,13 +1,12 @@
 import { BaseTool } from "./base-tool";
 import { ToolType, type ToolEvent } from "../tool-types";
-import type { SchItem } from "../items";
-import { vec2Sub, type Vec2 } from "../types";
+import type { EditableItem } from "../../kicanvas/kicad/schematic-edit";
 
 export class MoveTool extends BaseTool {
   readonly type = ToolType.MOVE;
 
-  private moveItems: SchItem[] = [];
-  private moveOrigin: Vec2 = { x: 0, y: 0 };
+  private moveItems: EditableItem[] = [];
+  private moveOrigin: { x: number; y: number } = { x: 0, y: 0 };
 
   onDeactivate(): void {
     this.moveItems = [];
@@ -17,23 +16,20 @@ export class MoveTool extends BaseTool {
     const startEvent = evt.type === "click" || evt.type === "mousedown";
     if (startEvent && this.moveItems.length === 0) {
       this.moveItems = [];
-      for (const id of this.ctx.selection) {
-        const item = this.ctx.doc.getItem(id);
-        if (item) {
-          this.ctx.doc.commitModify(item);
-          this.moveItems.push(item);
-        }
+      for (const item of this.ctx.selection) {
+        this.ctx.doc.commitModify(item);
+        this.moveItems.push(item);
       }
       if (this.moveItems.length === 0) return;
-      this.moveOrigin = { ...evt.pos };
+      this.moveOrigin = { x: evt.pos.x, y: evt.pos.y };
       this.ctx.callbacks.showStatus("Moving... Click to place");
     } else if (evt.type === "motion" && this.moveItems.length > 0) {
-      const delta = vec2Sub(evt.pos, this.moveOrigin);
+      const delta = { x: evt.pos.x - this.moveOrigin.x, y: evt.pos.y - this.moveOrigin.y };
       for (const item of this.moveItems) {
-        item.move(delta);
+        item.move(delta as any);
       }
-      this.moveOrigin = { ...evt.pos };
-      this.ctx.callbacks.requestRedraw();
+      this.moveOrigin = { x: evt.pos.x, y: evt.pos.y };
+      this.ctx.callbacks.requestRepaint();
     } else if (startEvent && this.moveItems.length > 0) {
       this.ctx.doc.commitPush("Move items");
       this.moveItems = [];

@@ -1,6 +1,12 @@
 // Transaction-based undo/redo system - mirrors KiCad's SCH_COMMIT pattern
 
-import type { SchItem } from "./items";
+// Works with any item that has uuid, clone(), move(), rotate(), mirrorH(), mirrorV()
+// Compatible with both SchItem (legacy) and EditableItem (kicanvas)
+export interface UndoableItem {
+  uuid?: string;
+  id?: string;
+  clone(): UndoableItem;
+}
 
 export enum ChangeType {
   ADD = "add",
@@ -10,8 +16,8 @@ export enum ChangeType {
 
 interface Change {
   type: ChangeType;
-  item: SchItem;
-  snapshot?: SchItem; // Clone of item before modification (for MODIFY)
+  item: UndoableItem;
+  snapshot?: UndoableItem; // Clone of item before modification (for MODIFY)
 }
 
 interface Transaction {
@@ -25,7 +31,7 @@ export class UndoStack {
   private stagedChanges: Change[] = [];
   private maxSize = 100;
 
-  stage(item: SchItem, type: ChangeType): void {
+  stage(item: UndoableItem, type: ChangeType): void {
     const change: Change = { type, item };
 
     if (type === ChangeType.MODIFY) {
@@ -58,9 +64,9 @@ export class UndoStack {
   }
 
   undo(
-    addFn: (item: SchItem) => void,
-    removeFn: (item: SchItem) => void,
-    restoreFn: (item: SchItem, snapshot: SchItem) => void,
+    addFn: (item: UndoableItem) => void,
+    removeFn: (item: UndoableItem) => void,
+    restoreFn: (item: UndoableItem, snapshot: UndoableItem) => void,
   ): string | null {
     const tx = this.undoStack.pop();
     if (!tx) return null;
@@ -91,9 +97,9 @@ export class UndoStack {
   }
 
   redo(
-    addFn: (item: SchItem) => void,
-    removeFn: (item: SchItem) => void,
-    restoreFn: (item: SchItem, snapshot: SchItem) => void,
+    addFn: (item: UndoableItem) => void,
+    removeFn: (item: UndoableItem) => void,
+    restoreFn: (item: UndoableItem, snapshot: UndoableItem) => void,
   ): string | null {
     const tx = this.redoStack.pop();
     if (!tx) return null;

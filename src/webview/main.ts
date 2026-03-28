@@ -3,13 +3,15 @@ import { Footprint } from "../kicanvas/kicad/board";
 import { SchematicSymbol } from "../kicanvas/kicad/schematic";
 import { BoardViewer } from "../kicanvas/viewers/board/viewer";
 import { EditableSchematicViewer } from "../kicanvas/viewers/schematic/editable-viewer";
+import type { EditEvent } from "../kicanvas/viewers/schematic/editable-viewer";
 import { Project, ProjectPage } from "../kicanvas/kicanvas/project";
 import { LocalFileSystem } from "../kicanvas/kicanvas/services/vfs";
 import themes from "../kicanvas/kicanvas/themes/index";
-import { EditorOverlay } from "./editor-overlay";
-import { ToolType } from "../editor/tools";
+import { ToolType, ToolManager } from "../editor/tools";
+import { KicadSchDoc } from "../editor/kicad-sch-doc";
 import { SymbolLibrary } from "./symbol-library";
-import { exportToKicadSch } from "./sch-export";
+import { isEditable, type EditableItem } from "../kicanvas/kicad/schematic-edit";
+import { Vec2 } from "../kicanvas/base/math";
 
 declare global {
   interface Window {
@@ -38,8 +40,24 @@ const fileType = window.__KICAD_FILE_TYPE__;
 let currentViewer: BoardViewer | EditableSchematicViewer | null = null;
 let currentProject: Project | null = null;
 let currentSch: KicadSch | null = null;
-let editorOverlay: EditorOverlay | null = null;
-let editModeActive = false;
+let currentDoc: KicadSchDoc | null = null;
+let currentToolManager: ToolManager | null = null;
+let symLibrary: SymbolLibrary | null = null;
+
+function showLoadError(err: unknown) {
+  console.error("Failed to load KiCad document:", err);
+  const message = err instanceof Error ? err.message : String(err);
+  loadingOverlay.classList.remove("hidden");
+  loadingText.textContent = `Error: ${message}`;
+  loadingText.style.color = "#f44";
+}
+
+function shouldLoadAsProject(projectFiles: Record<string, string>, primaryFileName: string): boolean {
+  if (fileType === "project") {
+    return true;
+  }
+  return Object.keys(projectFiles).length > 1;
+}
 
 function unescapeHtml(text: string): string {
   const ta = document.createElement("textarea");
@@ -252,54 +270,6 @@ function buildSymbolsPanel(viewer: EditableSchematicViewer, sch: KicadSch) {
   });
 }
 
-function buildPropertiesPanel(): HTMLDivElement {
-  const panel = document.createElement("div");
-  panel.className = "panel";
-  panel.innerHTML = `<div class="panel-section">
-    <div class="panel-section-title">Selection</div>
-    <div id="props-content"><span style="color:var(--fg-dim)">Click an item to see its properties</span></div>
-  </div>`;
-  return panel;
-}
-
-function updateProperties(item: any) {
-  const el = document.getElementById("props-content");
-  if (!el) return;
-
-  if (!item) {
-    el.innerHTML = '<span style="color:var(--fg-dim)">Click an item to see its properties</span>';
-    return;
-  }
-
-  const ctx = item.context ?? item;
-  let html = "";
-
-  if (ctx instanceof Footprint) {
-    html += prop("Reference", ctx.reference);
-    html += prop("Value", ctx.value);
-    html += prop("Layer", ctx.layer);
-    if (ctx.at) {
-      html += prop("Position", `${ctx.at.position.x.toFixed(2)}, ${ctx.at.position.y.toFixed(2)} mm`);
-      if (ctx.at.rotation) html += prop("Rotation", ctx.at.rotation + "°");
-    }
-    html += prop("Library", ctx.library_link);
-    html += prop("Pads", String(ctx.pads?.length ?? 0));
-    html += prop("UUID", ctx.uuid ?? "-");
-  } else if (ctx instanceof SchematicSymbol) {
-    html += prop("Reference", ctx.reference);
-    html += prop("Value", ctx.value);
-    html += prop("Footprint", ctx.footprint);
-    html += prop("Library", ctx.lib_id);
-    if (ctx.at) html += prop("Position", `${ctx.at.position.x.toFixed(2)}, ${ctx.at.position.y.toFixed(2)} mm`);
-    html += prop("UUID", ctx.uuid ?? "-");
-  } else {
-    html += prop("Type", ctx.constructor?.name ?? "Unknown");
-    if (ctx.uuid) html += prop("UUID", ctx.uuid);
-  }
-
-  el.innerHTML = html;
-}
-
 function buildInfoPanel(doc: KicadPCB | KicadSch, project: Project | null) {
   const panel = panels.get("info");
   if (!panel) return;
@@ -342,6 +312,44 @@ function buildInfoPanel(doc: KicadPCB | KicadSch, project: Project | null) {
   panel.innerHTML = html;
 }
 
+function updateProperties(item: any) {
+  const el = document.getElementById("props-content");
+  if (!el) return;
+
+  if (!item) {
+    el.innerHTML = '<span style="color:var(--fg-dim)">Click an item to see its properties</span>';
+    return;
+  }
+
+  const ctx = item.context ?? item;
+  let html = "";
+
+  if (ctx instanceof Footprint) {
+    html += prop("Reference", ctx.reference);
+    html += prop("Value", ctx.value);
+    html += prop("Layer", ctx.layer);
+    if (ctx.at) {
+      html += prop("Position", `${ctx.at.position.x.toFixed(2)}, ${ctx.at.position.y.toFixed(2)} mm`);
+      if (ctx.at.rotation) html += prop("Rotation", ctx.at.rotation + "°");
+    }
+    html += prop("Library", ctx.library_link);
+    html += prop("Pads", String(ctx.pads?.length ?? 0));
+    html += prop("UUID", ctx.uuid ?? "-");
+  } else if (ctx instanceof SchematicSymbol) {
+    html += prop("Reference", ctx.reference);
+    html += prop("Value", ctx.value);
+    html += prop("Footprint", ctx.footprint);
+    html += prop("Library", ctx.lib_id);
+    if (ctx.at) html += prop("Position", `${ctx.at.position.x.toFixed(2)}, ${ctx.at.position.y.toFixed(2)} mm`);
+    html += prop("UUID", ctx.uuid ?? "-");
+  } else {
+    html += prop("Type", ctx.constructor?.name ?? "Unknown");
+    if (ctx.uuid) html += prop("UUID", ctx.uuid);
+  }
+
+  el.innerHTML = html;
+}
+
 // ==================== Page Navigation ====================
 
 function setupPageSelector(project: Project, activePage: ProjectPage) {
@@ -372,6 +380,75 @@ function setupPageSelector(project: Project, activePage: ProjectPage) {
   };
 }
 
+// ==================== Unified Editing ====================
+
+const editorToolbar = document.getElementById("editor-toolbar")!;
+const editorStatusEl = document.getElementById("editor-status")!;
+
+function setupUnifiedEditing(viewer: EditableSchematicViewer, sch: KicadSch) {
+  const doc = new KicadSchDoc(sch);
+  currentDoc = doc;
+
+  // Build symbol library
+  symLibrary = SymbolLibrary.build(sch, projectFiles);
+  if (globalLibraryIndex) {
+    symLibrary.addGlobalIndex(globalLibraryIndex);
+  }
+
+  const toolManager = new ToolManager(doc, {
+    requestRedraw: () => viewer.requestOverlayRepaint(),
+    requestRepaint: () => viewer.repaintAll(),
+    requestSymbolChooser: () => promptSymbol(),
+    requestLabelText: (current) => promptLabel(current),
+    showStatus: (msg) => { editorStatusEl.textContent = msg; },
+    setCursor: (cursor) => { viewer.canvas.style.cursor = cursor; },
+    editProperties: (item) => editProperties(item, doc, viewer),
+  });
+  toolManager.symLibrary = symLibrary;
+  currentToolManager = toolManager;
+
+  // Wire viewer edit events to tool manager
+  viewer.onEditEvent = (evt: EditEvent) => {
+    const pos = evt.worldPos;
+    const snapped = toolManager.grid.snapToGrid(pos);
+    const snappedVec = new Vec2(snapped.x, snapped.y);
+
+    // Map EditEvent to ToolEvent
+    const toolEvt = {
+      type: evt.type as any,
+      pos: snappedVec,
+      rawPos: pos,
+      key: evt.key,
+      shift: evt.shift,
+      ctrl: evt.ctrl,
+      button: evt.button,
+      hits: evt.hits,
+    };
+
+    toolManager.handleEvent(toolEvt);
+
+    // Sync selection between viewer and tool manager
+    if (evt.type === "click" || evt.type === "mousedown") {
+      syncSelectionToViewer(viewer, toolManager);
+    }
+
+    if (evt.type === "motion") {
+      const topHit = evt.hits[0];
+      viewer.setHovered(topHit?.item ?? null);
+    }
+  };
+
+  // Show toolbar
+  editorToolbar.style.display = "flex";
+}
+
+function syncSelectionToViewer(viewer: EditableSchematicViewer, toolManager: ToolManager) {
+  viewer.clearSelection();
+  for (const item of toolManager.selection) {
+    viewer.selectItem(item, true);
+  }
+}
+
 // ==================== Viewer Lifecycle ====================
 
 function wireViewerEvents(viewer: BoardViewer | EditableSchematicViewer) {
@@ -387,28 +464,6 @@ function wireViewerEvents(viewer: BoardViewer | EditableSchematicViewer) {
   });
 }
 
-function wireSchematicEditEvents(viewer: EditableSchematicViewer) {
-  viewer.onEditEvent = (evt) => {
-    if (evt.type === "click" && !evt.ctrl) {
-      const topHit = evt.hits[0];
-      if (topHit) {
-        if (evt.shift) {
-          viewer.toggleSelection(topHit.item);
-        } else {
-          viewer.selectItem(topHit.item);
-        }
-      } else if (!evt.shift) {
-        viewer.clearSelection();
-      }
-    }
-
-    if (evt.type === "motion") {
-      const topHit = evt.hits[0];
-      viewer.setHovered(topHit?.item ?? null);
-    }
-  };
-}
-
 async function showPage(page: ProjectPage) {
   try {
     loadingOverlay.classList.remove("hidden");
@@ -418,6 +473,8 @@ async function showPage(page: ProjectPage) {
       currentViewer.dispose();
       currentViewer = null;
     }
+    currentDoc = null;
+    currentToolManager = null;
 
     const oldCanvas = canvasContainer.querySelector("canvas");
     if (oldCanvas) oldCanvas.remove();
@@ -439,7 +496,6 @@ async function showPage(page: ProjectPage) {
         { id: "info", label: "Info" },
       ]);
 
-      // Insert properties panel content
       const propsPanel = panels.get("properties")!;
       propsPanel.innerHTML = `<div class="panel-section"><div class="panel-section-title">Selection</div><div id="props-content"><span style="color:var(--fg-dim)">Click an item to see its properties</span></div></div>`;
 
@@ -458,6 +514,7 @@ async function showPage(page: ProjectPage) {
         console.warn("Panel build error (non-fatal):", panelErr);
       }
 
+      editorToolbar.style.display = "none";
       document.getElementById("btn-flip")?.style.setProperty("display", "");
     } else if (doc instanceof KicadSch) {
       currentSch = doc;
@@ -476,21 +533,12 @@ async function showPage(page: ProjectPage) {
       await viewer.setup();
       await viewer.load(doc);
 
-      wireSchematicEditEvents(viewer);
       wireViewerEvents(viewer);
       buildSymbolsPanel(viewer, doc);
       buildInfoPanel(doc, currentProject);
 
-      // Reset editor overlay when schematic changes
-      if (editorOverlay) {
-        editorOverlay.dispose();
-        editorOverlay = null;
-      }
-      if (editModeActive) {
-        editModeActive = false;
-        editorToolbar.style.display = "none";
-        editModeBtn?.classList.remove("active");
-      }
+      // Always-on editing for schematics
+      setupUnifiedEditing(viewer, doc);
 
       document.getElementById("btn-flip")?.style.setProperty("display", "none");
     }
@@ -507,25 +555,23 @@ async function showPage(page: ProjectPage) {
 
 async function loadProject(projectFiles: Record<string, string>, primaryFileName: string) {
   loadingText.textContent = "Loading project...";
+  loadingText.style.color = "";
   loadingOverlay.classList.remove("hidden");
 
-  // Create File objects for the VFS
   const files: File[] = [];
   for (const [name, content] of Object.entries(projectFiles)) {
     files.push(new File([content], name, { type: "text/plain" }));
   }
 
-  // If project has multiple files, use the Project class
-  const hasMultipleFiles = files.length > 1;
+  const loadAsProject = shouldLoadAsProject(projectFiles, primaryFileName);
 
-  if (hasMultipleFiles) {
+  if (loadAsProject) {
     const project = new Project();
     currentProject = project;
 
     const vfs = new LocalFileSystem(files);
     await project.load(vfs);
 
-    // Find the page that matches the opened file
     let targetPage: ProjectPage | undefined;
     for (const page of project.pages()) {
       if (page.filename === primaryFileName) {
@@ -538,24 +584,23 @@ async function loadProject(projectFiles: Record<string, string>, primaryFileName
       targetPage = project.first_page ?? undefined;
     }
 
-    if (targetPage) {
-      setupPageSelector(project, targetPage);
-      project.set_active_page(targetPage);
-
-      // Listen for page changes
-      project.addEventListener("change", () => {
-        const page = project.active_page;
-        if (page) {
-          showPage(page);
-          // Update selector
-          pageSelector.value = page.project_path;
-        }
-      });
-
-      await showPage(targetPage);
+    if (!targetPage) {
+      throw new Error(`Unable to find a loadable project page for ${primaryFileName}`);
     }
+
+    setupPageSelector(project, targetPage);
+    project.set_active_page(targetPage);
+
+    project.addEventListener("change", () => {
+      const page = project.active_page;
+      if (page) {
+        showPage(page).catch(showLoadError);
+        pageSelector.value = page.project_path;
+      }
+    });
+
+    await showPage(targetPage);
   } else {
-    // Single file mode - no project
     currentProject = null;
     const content = projectFiles[primaryFileName] ?? Object.values(projectFiles)[0]!;
     const name = primaryFileName || Object.keys(projectFiles)[0]!;
@@ -590,6 +635,7 @@ async function loadProject(projectFiles: Record<string, string>, primaryFileName
       buildFootprintPanel(viewer, board);
       buildNetPanel(viewer, board);
       buildInfoPanel(board, null);
+      editorToolbar.style.display = "none";
     } else {
       setupTabs([
         { id: "symbols", label: "Symbols" },
@@ -605,14 +651,172 @@ async function loadProject(projectFiles: Record<string, string>, primaryFileName
       currentViewer = viewer;
       await viewer.setup();
       await viewer.load(sch);
-      wireSchematicEditEvents(viewer);
       wireViewerEvents(viewer);
       buildSymbolsPanel(viewer, sch);
       buildInfoPanel(sch, null);
+
+      // Always-on editing
+      setupUnifiedEditing(viewer, sch);
     }
 
     loadingOverlay.classList.add("hidden");
   }
+}
+
+// ==================== Dialogs ====================
+
+function promptSymbol(): Promise<string | null> {
+  return new Promise((resolve) => {
+    const lib = symLibrary;
+    if (!lib) { resolve(null); return; }
+
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;display:flex;align-items:center;justify-content:center;";
+
+    const modal = document.createElement("div");
+    modal.style.cssText = "background:#252526;border:1px solid #3c3c3c;border-radius:6px;width:420px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
+
+    const header = document.createElement("div");
+    header.style.cssText = "padding:12px 16px;border-bottom:1px solid #3c3c3c;font-size:13px;color:#e0e0e0;font-weight:600;";
+    header.textContent = `Choose Symbol (${lib.size} available)`;
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.placeholder = "Search symbols...";
+    input.style.cssText = "margin:8px 12px;padding:6px 10px;background:#1e1e1e;border:1px solid #3c3c3c;border-radius:4px;color:#ccc;font-size:12px;outline:none;";
+
+    const list = document.createElement("div");
+    list.style.cssText = "flex:1;overflow-y:auto;padding:4px 0;min-height:100px;max-height:50vh;";
+
+    modal.appendChild(header);
+    modal.appendChild(input);
+    modal.appendChild(list);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    let debounceTimer: number;
+
+    const renderList = (query: string) => {
+      const results = lib.search(query);
+      const grouped = new Map<string, typeof results>();
+      for (const r of results) {
+        const g = grouped.get(r.libraryName) ?? [];
+        g.push(r);
+        grouped.set(r.libraryName, g);
+      }
+
+      let html = "";
+      for (const [libName, entries] of grouped) {
+        html += `<div style="padding:4px 12px;font-size:10px;color:#858585;text-transform:uppercase;letter-spacing:0.5px;margin-top:4px;">${esc(libName)}</div>`;
+        for (const e of entries) {
+          html += `<div class="sym-item" data-id="${esc(e.fullId)}" style="padding:4px 16px;font-size:12px;color:#ccc;cursor:pointer;border-radius:3px;margin:0 4px;">${esc(e.symbolName)}</div>`;
+        }
+      }
+      if (results.length === 0) {
+        html = `<div style="padding:16px;color:#858585;text-align:center;">No symbols found</div>`;
+      }
+      list.innerHTML = html;
+
+      list.querySelectorAll(".sym-item").forEach((el) => {
+        el.addEventListener("mouseenter", () => (el as HTMLElement).style.background = "#2a2d2e");
+        el.addEventListener("mouseleave", () => (el as HTMLElement).style.background = "");
+        el.addEventListener("click", () => {
+          const fullId = (el as HTMLElement).dataset.id!;
+          if (!lib.isLoaded(fullId)) {
+            const libName = fullId.split(":")[0]!;
+            vscode.postMessage({ type: "requestLibrary", libraryName: libName });
+            (el as HTMLElement).textContent = "Loading...";
+            (el as HTMLElement).style.color = "#858585";
+            const checkLoaded = setInterval(() => {
+              if (lib.isLoaded(fullId)) {
+                clearInterval(checkLoaded);
+                cleanup();
+                resolve(fullId);
+              }
+            }, 100);
+            setTimeout(() => {
+              clearInterval(checkLoaded);
+              if (document.body.contains(overlay)) {
+                (el as HTMLElement).textContent = "Failed to load";
+                (el as HTMLElement).style.color = "#f44";
+              }
+            }, 5000);
+          } else {
+            cleanup();
+            resolve(fullId);
+          }
+        });
+      });
+    };
+
+    const cleanup = () => {
+      clearTimeout(debounceTimer);
+      document.body.removeChild(overlay);
+    };
+
+    input.addEventListener("input", () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => renderList(input.value), 100);
+    });
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) { cleanup(); resolve(null); }
+    });
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.stopPropagation(); cleanup(); resolve(null); }
+      if (e.key === "Enter") {
+        const first = list.querySelector(".sym-item") as HTMLElement | null;
+        if (first) { cleanup(); resolve(first.dataset.id!); }
+      }
+    });
+
+    renderList("");
+    setTimeout(() => input.focus(), 0);
+  });
+}
+
+function promptLabel(current?: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const overlay = document.createElement("div");
+    overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;display:flex;align-items:center;justify-content:center;";
+
+    const modal = document.createElement("div");
+    modal.style.cssText = "background:#252526;border:1px solid #3c3c3c;border-radius:6px;width:320px;padding:16px;box-shadow:0 8px 32px rgba(0,0,0,0.5);";
+
+    const label = document.createElement("div");
+    label.style.cssText = "font-size:13px;color:#e0e0e0;font-weight:600;margin-bottom:8px;";
+    label.textContent = "Enter label text";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.value = current ?? "";
+    input.style.cssText = "width:100%;padding:6px 10px;background:#1e1e1e;border:1px solid #3c3c3c;border-radius:4px;color:#ccc;font-size:12px;outline:none;box-sizing:border-box;";
+
+    modal.appendChild(label);
+    modal.appendChild(input);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const cleanup = () => { document.body.removeChild(overlay); };
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.stopPropagation(); cleanup(); resolve(input.value.trim() || null); }
+      if (e.key === "Escape") { e.stopPropagation(); cleanup(); resolve(null); }
+    });
+
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) { cleanup(); resolve(null); }
+    });
+
+    setTimeout(() => input.focus(), 0);
+  });
+}
+
+function editProperties(item: any, doc: KicadSchDoc, viewer: EditableSchematicViewer) {
+  // TODO: Port property editor dialog for KicadSch items
+  // For now, show basic info
+  console.log("Edit properties:", item);
 }
 
 // Helpers
@@ -626,60 +830,14 @@ function info(label: string, value: string): string {
   return `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`;
 }
 
-// ==================== Editor Mode ====================
-
-const editorToolbar = document.getElementById("editor-toolbar")!;
-const editorStatusEl = document.getElementById("editor-status")!;
-const editModeBtn = document.getElementById("btn-edit-mode");
-
-function toggleEditMode() {
-  editModeActive = !editModeActive;
-
-  // Find the kicanvas viewer canvas
-  const viewerCanvas = canvasContainer.querySelector("canvas:not([data-editor])") as HTMLCanvasElement | null;
-
-  if (editModeActive) {
-    editorToolbar.style.display = "flex";
-    editModeBtn?.classList.add("active");
-
-    // Hide kicanvas viewer canvas
-    if (viewerCanvas) viewerCanvas.style.display = "none";
-
-    // Create overlay if needed, importing current schematic data
-    if (!editorOverlay) {
-      const symLib = SymbolLibrary.build(currentSch, projectFiles);
-      if (globalLibraryIndex) {
-        symLib.addGlobalIndex(globalLibraryIndex);
-      }
-      editorOverlay = new EditorOverlay(canvasContainer, editorStatusEl, currentSch ?? undefined, symLib);
-      editorOverlay.canvas.dataset.editor = "true";
-      editorOverlay.onRequestLibrary = (libraryName) => {
-        vscode.postMessage({ type: "requestLibrary", libraryName });
-      };
-    }
-    editorOverlay.canvas.style.display = "block";
-  } else {
-    editorToolbar.style.display = "none";
-    editModeBtn?.classList.remove("active");
-
-    // Show kicanvas viewer canvas, hide editor overlay
-    if (viewerCanvas) viewerCanvas.style.display = "block";
-    if (editorOverlay) {
-      editorOverlay.canvas.style.display = "none";
-    }
-  }
-}
-
-editModeBtn?.addEventListener("click", toggleEditMode);
+// ==================== Editor Toolbar ====================
 
 // Editor tool buttons
 editorToolbar.querySelectorAll(".etool").forEach((btn) => {
   btn.addEventListener("click", () => {
-    if (!editorOverlay) return;
+    if (!currentToolManager) return;
     const tool = (btn as HTMLElement).dataset.tool as ToolType;
-    editorOverlay.setTool(tool);
-
-    // Update active state on buttons
+    currentToolManager.setTool(tool);
     editorToolbar.querySelectorAll(".etool").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
   });
@@ -687,51 +845,39 @@ editorToolbar.querySelectorAll(".etool").forEach((btn) => {
 
 // Undo/Redo buttons
 document.getElementById("btn-undo")?.addEventListener("click", () => {
-  if (!editorOverlay) return;
-  const desc = editorOverlay.doc.performUndo();
+  if (!currentDoc) return;
+  const desc = currentDoc.performUndo();
   if (desc) editorStatusEl.textContent = `Undo: ${desc}`;
+  if (currentViewer instanceof EditableSchematicViewer) currentViewer.repaintAll();
 });
 document.getElementById("btn-redo")?.addEventListener("click", () => {
-  if (!editorOverlay) return;
-  const desc = editorOverlay.doc.performRedo();
+  if (!currentDoc) return;
+  const desc = currentDoc.performRedo();
   if (desc) editorStatusEl.textContent = `Redo: ${desc}`;
+  if (currentViewer instanceof EditableSchematicViewer) currentViewer.repaintAll();
 });
 
-// Poll tool state to sync button highlights with keyboard shortcuts
+// Poll tool state to sync button highlights
 setInterval(() => {
-  if (!editorOverlay || !editModeActive) return;
-  const currentTool = editorOverlay.tools.activeTool;
+  if (!currentToolManager) return;
+  const currentTool = currentToolManager.activeTool;
   editorToolbar.querySelectorAll(".etool").forEach((btn) => {
     const tool = (btn as HTMLElement).dataset.tool;
     btn.classList.toggle("active", tool === currentTool);
   });
 }, 100);
 
-// Keyboard shortcut to toggle edit mode
-document.addEventListener("keydown", (e) => {
-  if (e.key === "e" && !e.ctrlKey && !e.metaKey && !e.altKey && fileType === "schematic") {
-    // Only toggle if we're not in an input or the editor canvas
-    if (document.activeElement === document.body || document.activeElement === canvasContainer) {
-      toggleEditMode();
-      e.preventDefault();
-    }
-  }
-});
-
 // Boot
 const primaryContent = unescapeHtml(window.__KICAD_FILE_CONTENT__);
 const primaryFileName = window.__KICAD_FILE_NAME__;
 const projectFiles = window.__KICAD_PROJECT_FILES__;
 
-// Ensure the primary file is in the project files map (in case it wasn't gathered)
 if (!projectFiles[primaryFileName]) {
   projectFiles[primaryFileName] = primaryContent;
 }
 
 loadProject(projectFiles, primaryFileName).catch((err) => {
-  console.error("Failed to load project:", err);
-  loadingText.textContent = `Error: ${err.message || err}`;
-  loadingText.style.color = "#f44";
+  showLoadError(err);
 });
 
 // Global library index received from extension
@@ -742,43 +888,35 @@ window.addEventListener("message", (event) => {
   const msg = event.data;
   if (msg.type === "update") {
     const updatedFiles = msg.projectFiles ?? { [msg.fileName]: msg.content };
-    loadProject(updatedFiles, msg.fileName).catch(console.error);
+    loadProject(updatedFiles, msg.fileName).catch(showLoadError);
   }
   if (msg.type === "requestSave") {
-    if (editorOverlay) {
-      const content = exportToKicadSch(editorOverlay.doc, primaryContent);
-      vscode.postMessage({ type: "saveContent", content });
-      editorOverlay.doc.dirty = false;
-    } else {
-      vscode.postMessage({ type: "saveContent", content: primaryContent });
-    }
+    // TODO: Serialize KicadSch directly when unified serialization is done
+    // For now, send back original content (save not yet supported in unified mode)
+    vscode.postMessage({ type: "saveContent", content: primaryContent });
   }
   if (msg.type === "globalLibraryIndex") {
     globalLibraryIndex = msg.index;
-    // If editor overlay already exists, add the index
-    if (editorOverlay) {
-      editorOverlay.symLibrary.addGlobalIndex(msg.index);
+    if (symLibrary) {
+      symLibrary.addGlobalIndex(msg.index);
     }
   }
   if (msg.type === "libraryContent") {
-    // On-demand library content received — add to the symbol library
-    if (editorOverlay) {
-      editorOverlay.symLibrary.loadLibraryContent(msg.libraryName, msg.content);
+    if (symLibrary) {
+      symLibrary.loadLibraryContent(msg.libraryName, msg.content);
     }
   }
   if (msg.type === "setTool") {
-    // Ensure edit mode is active, then switch tool
-    if (!editModeActive) toggleEditMode();
-    if (editorOverlay) editorOverlay.setTool(msg.tool);
+    if (currentToolManager) currentToolManager.setTool(msg.tool);
   }
   if (msg.type === "toggleEditMode") {
-    toggleEditMode();
+    // No-op: editing is always on
   }
 });
 
 // Notify extension when editor state becomes dirty
 setInterval(() => {
-  if (editorOverlay?.doc.dirty) {
+  if (currentDoc?.dirty) {
     vscode.postMessage({ type: "dirty" });
   }
 }, 500);

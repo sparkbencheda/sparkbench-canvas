@@ -43,6 +43,7 @@ export class Project extends EventTarget implements IDisposable {
         this.#fs = fs;
 
         let promises = [];
+        const attempted_sheet_files = new Set<string>();
 
         for (const filename of this.#fs.list()) {
             promises.push(this.#load_file(filename));
@@ -53,18 +54,42 @@ export class Project extends EventTarget implements IDisposable {
         while (promises.length) {
             // 'Recursively' resolve all schematics until none remain
             promises = [];
+            const missing_sheet_files = new Set<string>();
+
             for (const schematic of this.schematics()) {
                 for (const sheet of schematic.sheets) {
-                    const sheet_sch = this.#files_by_name.get(
-                        sheet.sheetfile ?? "",
-                    ) as KicadSch;
+                    const sheetfile = sheet.sheetfile ?? "";
+                    const sheet_sch = this.#files_by_name.get(sheetfile) as KicadSch;
 
-                    if (!sheet_sch && sheet.sheetfile) {
+                    if (!sheet_sch && sheetfile) {
                         // Missing schematic, attempt to fetch
-                        promises.push(this.#load_file(sheet.sheetfile));
+                        missing_sheet_files.add(sheetfile);
                     }
                 }
             }
+
+            if (!missing_sheet_files.size) {
+                break;
+            }
+
+            const next_sheet_files = Array.from(missing_sheet_files).filter(
+                (sheetfile) => !attempted_sheet_files.has(sheetfile),
+            );
+
+            if (!next_sheet_files.length) {
+                log.warn(
+                    `Unable to resolve schematic sheet file(s): ${Array.from(missing_sheet_files).join(
+                        ", ",
+                    )}`,
+                );
+                break;
+            }
+
+            for (const sheetfile of next_sheet_files) {
+                attempted_sheet_files.add(sheetfile);
+                promises.push(this.#load_file(sheetfile));
+            }
+
             await Promise.all(promises);
         }
 

@@ -29,11 +29,6 @@ export function activate(context: vscode.ExtensionContext) {
     );
   }
 
-  context.subscriptions.push(
-    vscode.commands.registerCommand("sparkbench.editor.toggleEditMode", () => {
-      KicadEditorProvider.postToActiveWebview({ type: "toggleEditMode" });
-    }),
-  );
 }
 
 export function deactivate() {}
@@ -247,6 +242,27 @@ const PROJECT_EXTENSIONS = [
 
 const PROJECT_EXACT_NAMES = ["sym-lib-table", "fp-lib-table"];
 
+function shouldSkipProjectEntry(name: string): boolean {
+  return name === ".git"
+    || name === "node_modules"
+    || name.endsWith("-backups")
+    || name.startsWith(".");
+}
+
+function shouldIncludeProjectFile(name: string): boolean {
+  if (
+    name.startsWith("~")
+    || name.startsWith("#")
+    || name.startsWith("_autosave-")
+    || name.endsWith(".lck")
+  ) {
+    return false;
+  }
+
+  return PROJECT_EXTENSIONS.some((ext) => name.endsWith(ext))
+    || PROJECT_EXACT_NAMES.includes(name);
+}
+
 class KicadDocument implements vscode.CustomDocument {
   uri: vscode.Uri;
   private _isDirty = false;
@@ -413,29 +429,39 @@ class KicadEditorProvider implements vscode.CustomEditorProvider<KicadDocument> 
     documentUri: vscode.Uri,
   ): Promise<Record<string, string>> {
     const files: Record<string, string> = {};
-    const dir = vscode.Uri.joinPath(documentUri, "..");
+    const rootDir = vscode.Uri.file(path.dirname(documentUri.fsPath));
 
-    try {
+    const visitDirectory = async (dir: vscode.Uri): Promise<void> => {
       const entries = await vscode.workspace.fs.readDirectory(dir);
 
       for (const [name, type] of entries) {
+        const entryUri = vscode.Uri.joinPath(dir, name);
+
+        if (type === vscode.FileType.Directory) {
+          if (shouldSkipProjectEntry(name)) continue;
+          await visitDirectory(entryUri);
+          continue;
+        }
+
         if (type !== vscode.FileType.File) continue;
 
-        const isProjectFile = PROJECT_EXTENSIONS.some((ext) =>
-          name.endsWith(ext),
-        ) || PROJECT_EXACT_NAMES.includes(name);
+        const isProjectFile = shouldIncludeProjectFile(name);
         if (!isProjectFile) continue;
 
         try {
-          const fileUri = vscode.Uri.joinPath(dir, name);
-          const content = await vscode.workspace.fs.readFile(fileUri);
-          files[name] = Buffer.from(content).toString("utf-8");
+          const content = await vscode.workspace.fs.readFile(entryUri);
+          const relativePath = path.relative(rootDir.fsPath, entryUri.fsPath).replace(/\\/g, "/");
+          files[relativePath] = Buffer.from(content).toString("utf-8");
         } catch (e) {
-          console.warn(`Failed to read project file ${name}:`, e);
+          console.warn(`Failed to read project file ${entryUri.fsPath}:`, e);
         }
       }
+    };
+
+    try {
+      await visitDirectory(rootDir);
     } catch (e) {
-      console.warn(`Failed to read project directory:`, e);
+      console.warn(`Failed to read project directory ${rootDir.fsPath}:`, e);
     }
 
     return files;
@@ -732,8 +758,6 @@ class KicadEditorProvider implements vscode.CustomEditorProvider<KicadDocument> 
         ${isPcb ? '<button class="toolbar-btn" id="btn-flip" title="Flip board view">Flip</button>' : ""}
         <button class="toolbar-btn" id="btn-zoom-fit" title="Zoom to fit">Fit</button>
         <button class="toolbar-btn" id="btn-zoom-sel" title="Zoom to selection" disabled>Selection</button>
-        ${!isPcb ? `<div class="toolbar-sep"></div>
-        <button class="toolbar-btn" id="btn-edit-mode" title="Toggle editor overlay (E)">Edit</button>` : ""}
         <div class="toolbar-sep"></div>
         <button class="toolbar-btn" id="btn-sidebar-toggle" title="Toggle sidebar">Panel</button>
       </div>

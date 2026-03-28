@@ -7,7 +7,7 @@
       "request": "launch",
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}",
-        "${env:HOME}/projects/electronics/kicad-projects-docs/sparksplit2"
+        "${workspaceFolder}/testdata/kicad/TFGPS01"
       ],
       "outFiles": ["${workspaceFolder}/dist/**/*.js"],
       "preLaunchTask": "npm: build"
